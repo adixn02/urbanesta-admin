@@ -69,7 +69,7 @@ export default function ChangeAdmin({ currentAdmin, onClose, onUpdateAdmin, erro
 
               <div className="alert alert-warning">
                 <i className="bi bi-shield-exclamation me-2"></i>
-                <strong>Security Notice:</strong> OTP will be sent to the current admin's phone number ({currentAdmin?.phoneNumber}) for verification. This ensures only authorized admin can update admin details.
+                <strong>Security Notice:</strong> OTP will be sent to the current admin&apos;s phone number ({currentAdmin?.phoneNumber}) for verification. This ensures only authorized admin can update admin details.
               </div>
 
               <h6 className="mb-3 mt-4">

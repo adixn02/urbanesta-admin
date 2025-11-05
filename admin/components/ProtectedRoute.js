@@ -43,7 +43,7 @@ export default function ProtectedRoute({ children, requiredRole = null }) {
       <div className="d-flex justify-content-center align-items-center" style={{ height: '100vh' }}>
         <div className="text-center">
           <h3>Access Denied</h3>
-          <p>You don't have permission to access this page.</p>
+          <p>You don&apos;t have permission to access this page.</p>
         </div>
       </div>
     );

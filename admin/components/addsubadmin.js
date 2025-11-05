@@ -63,7 +63,7 @@ export default function AddSubadmin({
 
               <div className="alert alert-info">
                 <i className="bi bi-info-circle me-2"></i>
-                <strong>Important:</strong> Please enter a <strong>proper and meaningful name</strong> for the subadmin. This name will be used in activity logs and system records. Use full name format (e.g., "John Doe" or "Rajesh Kumar") for better tracking and logging.
+                <strong>Important:</strong> Please enter a <strong>proper and meaningful name</strong> for the subadmin. This name will be used in activity logs and system records. Use full name format (e.g., &quot;John Doe&quot; or &quot;Rajesh Kumar&quot;) for better tracking and logging.
               </div>
               
               <div className="mb-3">

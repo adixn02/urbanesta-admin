@@ -20,6 +20,16 @@ const eslintConfig = [
       "next-env.d.ts",
     ],
   },
+  {
+    rules: {
+      // Allow unescaped entities (we'll use proper escaping)
+      "react/no-unescaped-entities": "error",
+      // Allow img tags (Next.js Image optimization can be added later)
+      "@next/next/no-img-element": "warn",
+      // React hooks exhaustive deps - warnings are acceptable
+      "react-hooks/exhaustive-deps": "warn",
+    },
+  },
 ];
 
 export default eslintConfig;

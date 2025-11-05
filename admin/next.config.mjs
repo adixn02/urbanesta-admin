@@ -3,6 +3,10 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002',
   },
+  eslint: {
+    // Don't fail build on ESLint warnings during production builds
+    ignoreDuringBuilds: false, // Keep false to catch errors, but warnings won't block
+  },
   images: {
     remotePatterns: [
       {
