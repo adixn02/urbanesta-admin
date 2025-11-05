@@ -4,6 +4,7 @@ import Header from '@/components/header';
 import Sidebar from '@/components/sidebar';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { fetchAnalytics } from '@/lib/analytics';
+import { API_BASE_URL } from '@/lib/config';
 
 export default function Admin() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -41,10 +42,7 @@ export default function Admin() {
     }
   };
 
-  // API base URL - adjust this based on your server configuration
-  const API_BASE_URL = process.env.NODE_ENV === 'production' 
-    ? 'https://your-production-api.com/api' 
-    : 'http://localhost:3002/api';
+  // API_BASE_URL is imported from config, which uses NEXT_PUBLIC_API_URL env variable
 
   useEffect(() => {
     fetchDashboardData();
@@ -64,31 +62,31 @@ export default function Admin() {
       
       // Fetch all stats in parallel with authentication headers
       const [userStatsResponse, leadStatsResponse, propertyStatsResponse, cityStatsResponse, builderStatsResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/users/stats`, {
+        fetch(`${API_BASE_URL}/api/users/stats`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
         }),
-        fetch(`${API_BASE_URL}/leads/stats`, {
+        fetch(`${API_BASE_URL}/api/leads/stats`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
         }),
-        fetch(`${API_BASE_URL}/properties/stats/summary`, {
+        fetch(`${API_BASE_URL}/api/properties/stats/summary`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
         }),
-        fetch(`${API_BASE_URL}/cities/stats`, {
+        fetch(`${API_BASE_URL}/api/cities/stats`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
         }),
-        fetch(`${API_BASE_URL}/builders/stats`, {
+        fetch(`${API_BASE_URL}/api/builders/stats`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'

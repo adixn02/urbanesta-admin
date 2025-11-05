@@ -1,13 +1,11 @@
 // API utility for analytics
-const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? 'https://your-production-api.com/api' 
-  : 'http://localhost:3002/api';
+import { API_BASE_URL } from './config';
 
 export const fetchAnalytics = async () => {
   try {
     const token = localStorage.getItem('token');
     
-    const response = await fetch(`${API_BASE_URL}/analytics/total-views`, {
+    const response = await fetch(`${API_BASE_URL}/api/analytics/total-views`, {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
