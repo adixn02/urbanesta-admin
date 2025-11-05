@@ -40,7 +40,12 @@ export const securityConfig = {
       },
       standardHeaders: true,
       legacyHeaders: false,
-      skip: (req) => req.path === '/healthz'
+      skip: (req) => req.path === '/healthz',
+      // Fix trust proxy warning - trust only the reverse proxy (nginx)
+      trustProxy: true,
+      validate: {
+        trustProxy: false // Disable validation warning since we're behind nginx
+      }
     }),
 
     // Strict rate limiting for sensitive endpoints
@@ -52,7 +57,11 @@ export const securityConfig = {
         retryAfter: Math.ceil((parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000) / 1000)
       },
       standardHeaders: true,
-      legacyHeaders: false
+      legacyHeaders: false,
+      trustProxy: true,
+      validate: {
+        trustProxy: false
+      }
     }),
 
     // Upload rate limiting
@@ -64,7 +73,11 @@ export const securityConfig = {
         retryAfter: Math.ceil((parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000) / 1000)
       },
       standardHeaders: true,
-      legacyHeaders: false
+      legacyHeaders: false,
+      trustProxy: true,
+      validate: {
+        trustProxy: false
+      }
     }),
 
     // Auth rate limiting
@@ -76,7 +89,11 @@ export const securityConfig = {
         retryAfter: Math.ceil((parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000) / 1000)
       },
       standardHeaders: true,
-      legacyHeaders: false
+      legacyHeaders: false,
+      trustProxy: true,
+      validate: {
+        trustProxy: false
+      }
     })
   }
 };
