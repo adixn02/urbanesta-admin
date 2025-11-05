@@ -5,6 +5,7 @@ import logo from '../public/img/logo.jpg';
 import 'bootstrap-icons/font/bootstrap-icons.css';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
+import { API_BASE_URL } from '@/lib/config';
 
 export default function Home(){
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -24,8 +25,7 @@ export default function Home(){
   const [blockedUntil, setBlockedUntil] = useState(null);
   
   const timerRef = useRef(null);
-  // Use environment variable for API URL
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+  // API_BASE_URL is imported from config, which handles /api stripping
   
   // API URL configuration
 
