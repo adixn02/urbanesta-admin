@@ -42,7 +42,8 @@ if (!MONGODB_URL) {
 app.use(securityConfig.helmet);
 
 // Trust proxy for accurate IP addresses (important for nginx reverse proxy)
-app.set('trust proxy', true);
+// Set to 1 to trust only the first proxy (nginx) - this prevents trust proxy bypass attacks
+app.set('trust proxy', 1);
 
 // CORS Configuration - Use environment variables
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
