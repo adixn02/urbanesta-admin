@@ -194,16 +194,21 @@ mongoose
   });
 
 // Graceful shutdown handler
-const gracefulShutdown = (signal) => {
+const gracefulShutdown = async (signal) => {
   logger.info(`${signal} received. Starting graceful shutdown...`);
   
-  server.close(() => {
+  server.close(async () => {
     logger.info('HTTP server closed');
     
-    mongoose.connection.close(false, () => {
+    try {
+      // Mongoose v8+ close() returns a Promise, no callback
+      await mongoose.connection.close();
       logger.info('MongoDB connection closed');
       process.exit(0);
-    });
+    } catch (err) {
+      logger.error('Error closing MongoDB connection:', { error: err.message });
+      process.exit(1);
+    }
   });
   
   // Force close after 10 seconds

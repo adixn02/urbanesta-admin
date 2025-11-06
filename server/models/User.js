@@ -82,7 +82,7 @@ const userSchema = new mongoose.Schema(
 );
 
 // Index for better query performance
-userSchema.index({ email: 1 });
+// Note: email already has an index from unique: true, so don't duplicate it
 userSchema.index({ isActive: 1 });
 userSchema.index({ createdAt: -1 });
 

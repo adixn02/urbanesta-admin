@@ -82,8 +82,7 @@ const adminSchema = new mongoose.Schema({
 });
 
 // Indexes for better performance
-adminSchema.index({ phoneNumber: 1 });
-adminSchema.index({ email: 1 });
+// Note: phoneNumber and email already have indexes from unique: true, so don't duplicate them
 adminSchema.index({ role: 1 });
 adminSchema.index({ isActive: 1 });
 adminSchema.index({ createdAt: -1 });
