@@ -6,10 +6,6 @@ import { useAuth } from "@/hooks/useAuth";
 export default function Sidebar({isSidebarOpen, toggleSidebar}) {
     const { user } = useAuth();
     
-    // Debug logging
-    console.log('Sidebar - User data:', user);
-    console.log('Sidebar - User role:', user?.role);
-    
     return(
         <>
           {/* side bar */}

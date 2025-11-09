@@ -5,8 +5,10 @@ import Sidebar from '@/components/sidebar';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { fetchAnalytics } from '@/lib/analytics';
 import { API_BASE_URL } from '@/lib/config';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function Admin() {
+  const { user } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
@@ -55,81 +57,142 @@ export default function Admin() {
 
       // Get authentication token
       const token = localStorage.getItem('token');
-      console.log('Dashboard - Token from localStorage:', token);
       
-      // Fetch analytics data
-      const totalViews = await fetchAnalytics();
+      // Fetch analytics data (with error handling)
+      let totalViews = 0;
+      try {
+        totalViews = await fetchAnalytics();
+      } catch (analyticsError) {
+        console.warn('Failed to fetch analytics:', analyticsError);
+        // Continue with other data even if analytics fails
+      }
+      
+      // Determine which stats to fetch based on user role
+      const isAdmin = user?.role === 'admin';
       
       // Fetch all stats in parallel with authentication headers
-      const [userStatsResponse, leadStatsResponse, propertyStatsResponse, cityStatsResponse, builderStatsResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/users/stats`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }),
-        fetch(`${API_BASE_URL}/api/leads/stats`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        }),
+      // Use Promise.allSettled to handle individual failures gracefully
+      // Only fetch user/lead stats if user is admin
+      const fetchPromises = [];
+      
+      if (isAdmin) {
+        // Admin can access all stats
+        fetchPromises.push(
+          fetch(`${API_BASE_URL}/api/users/stats`, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+          fetch(`${API_BASE_URL}/api/leads/stats`, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+        );
+      } else {
+        // Subadmin - skip user and lead stats
+        fetchPromises.push(
+          Promise.resolve({ status: 'skipped' }),
+          Promise.resolve({ status: 'skipped' })
+        );
+      }
+      
+      // All users can access these stats
+      fetchPromises.push(
         fetch(`${API_BASE_URL}/api/properties/stats/summary`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
-        }),
+        }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
         fetch(`${API_BASE_URL}/api/cities/stats`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
-        }),
+        }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
         fetch(`${API_BASE_URL}/api/builders/stats`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
-        })
-      ]);
+        }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+      );
+      
+      const [userStatsResult, leadStatsResult, propertyStatsResult, cityStatsResult, builderStatsResult] = await Promise.allSettled(fetchPromises);
 
-      const [userStatsData, leadStatsData, propertyStatsData, cityStatsData, builderStatsData] = await Promise.all([
-        userStatsResponse.json(),
-        leadStatsResponse.json(),
-        propertyStatsResponse.json(),
-        cityStatsResponse.json(),
-        builderStatsResponse.json()
-      ]);
+      // Extract data from results, using fallback values if any request failed
+      const userStatsData = (userStatsResult.status === 'fulfilled' && 
+                             userStatsResult.value.status !== 'skipped' && 
+                             userStatsResult.value.success) 
+        ? userStatsResult.value 
+        : { success: false, data: { totalUsers: 0, newUsersThisMonth: 0 } };
+      
+      const leadStatsData = (leadStatsResult.status === 'fulfilled' && 
+                             leadStatsResult.value.status !== 'skipped' && 
+                             leadStatsResult.value.success) 
+        ? leadStatsResult.value 
+        : { success: false, data: { totalLeads: 0 } };
+      
+      const propertyStatsData = propertyStatsResult.status === 'fulfilled' && propertyStatsResult.value.success 
+        ? propertyStatsResult.value 
+        : { success: false, data: { total: 0, regular: 0, builder: 0 } };
+      
+      const cityStatsData = cityStatsResult.status === 'fulfilled' && cityStatsResult.value.success 
+        ? cityStatsResult.value 
+        : { success: false, data: { totalCities: 0, activeCities: 0, totalLocalities: 0 } };
+      
+      const builderStatsData = builderStatsResult.status === 'fulfilled' && builderStatsResult.value.success 
+        ? builderStatsResult.value 
+        : { success: false, data: { totalBuilders: 0, activeBuilders: 0 } };
 
-      if (userStatsData.success && leadStatsData.success && propertyStatsData.success && cityStatsData.success && builderStatsData.success) {
-        setStats({
-          totalViews: totalViews || 0,
-          totalUsers: userStatsData.data.totalUsers || 0,
-          activeLeads: leadStatsData.data.totalLeads || 0,
-          newSignups: userStatsData.data.newUsersThisMonth || 0,
-          totalProperties: propertyStatsData.data.total || 0
-        });
+      // Set stats with available data (even if some requests failed)
+      setStats({
+        totalViews: totalViews || 0,
+        totalUsers: userStatsData.data?.totalUsers || 0,
+        activeLeads: leadStatsData.data?.totalLeads || 0,
+        newSignups: userStatsData.data?.newUsersThisMonth || 0,
+        totalProperties: propertyStatsData.data?.total || 0
+      });
 
-        setSummaryData({
-          cities: {
-            totalCities: cityStatsData.data.totalCities || 0,
-            activeCities: cityStatsData.data.activeCities || 0,
-            totalLocalities: cityStatsData.data.totalLocalities || 0
-          },
-          builders: {
-            totalBuilders: builderStatsData.data.totalBuilders || 0,
-            activeBuilders: builderStatsData.data.activeBuilders || 0
-          },
-          properties: {
-            total: propertyStatsData.data.total || 0,
-            regular: propertyStatsData.data.regular || 0,
-            builder: propertyStatsData.data.builder || 0
-          }
-        });
+      setSummaryData({
+        cities: {
+          totalCities: cityStatsData.data?.totalCities || 0,
+          activeCities: cityStatsData.data?.activeCities || 0,
+          totalLocalities: cityStatsData.data?.totalLocalities || 0
+        },
+        builders: {
+          totalBuilders: builderStatsData.data?.totalBuilders || 0,
+          activeBuilders: builderStatsData.data?.activeBuilders || 0
+        },
+        properties: {
+          total: propertyStatsData.data?.total || 0,
+          regular: propertyStatsData.data?.regular || 0,
+          builder: propertyStatsData.data?.builder || 0
+        }
+      });
 
-      } else {
-        throw new Error('Failed to fetch dashboard data');
+      // Show warning if some data failed to load, but don't throw error
+      // Don't include skipped requests (for subadmin)
+      const failedRequests = [
+        (userStatsResult.status === 'rejected' || (userStatsResult.value?.status === 'skipped' && isAdmin)) && 'Users',
+        (leadStatsResult.status === 'rejected' || (leadStatsResult.value?.status === 'skipped' && isAdmin)) && 'Leads',
+        propertyStatsResult.status === 'rejected' && 'Properties',
+        cityStatsResult.status === 'rejected' && 'Cities',
+        builderStatsResult.status === 'rejected' && 'Builders'
+      ].filter(Boolean);
+
+      if (failedRequests.length > 0) {
+        console.warn('Some dashboard data failed to load:', failedRequests.join(', '));
+        // Only show error if ALL requests failed
+        if (failedRequests.length === 5) {
+          setError(`Failed to load dashboard data. Please check your permissions and try again.`);
+        } else {
+          // Show a less severe warning
+          setError(`Some data may be incomplete. Failed to load: ${failedRequests.join(', ')}`);
+        }
       }
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
@@ -153,13 +216,22 @@ export default function Admin() {
     }
   };
 
-  const statsCards = [
-    { title: 'Total Views', value: stats.totalViews, icon: '👁️', color: 'secondary' },
-    { title: 'Total Users', value: stats.totalUsers, icon: '👥', color: 'primary' },
-    { title: 'Active Leads', value: stats.activeLeads, icon: '📋', color: 'success' },
-    { title: 'New Signups', value: stats.newSignups, icon: '🆕', color: 'warning' },
-    { title: 'Properties', value: stats.totalProperties, icon: '🏠', color: 'info' },
+  // Filter stats cards based on user role
+  // Subadmins can't access Users and Leads stats
+  const allStatsCards = [
+    { title: 'Total Views', value: stats.totalViews, icon: '👁️', color: 'secondary', roles: ['admin', 'subadmin'] },
+    { title: 'Total Users', value: stats.totalUsers, icon: '👥', color: 'primary', roles: ['admin'] },
+    { title: 'Active Leads', value: stats.activeLeads, icon: '📋', color: 'success', roles: ['admin'] },
+    { title: 'New Signups', value: stats.newSignups, icon: '🆕', color: 'warning', roles: ['admin'] },
+    { title: 'Properties', value: stats.totalProperties, icon: '🏠', color: 'info', roles: ['admin', 'subadmin'] },
   ];
+
+  // Filter cards based on user role
+  const statsCards = allStatsCards.filter(card => {
+    if (!card.roles) return true; // Show if no role restriction
+    if (!user?.role) return true; // Show all if role not available yet
+    return card.roles.includes(user.role);
+  });
 
   return (
     <ProtectedRoute>
@@ -180,8 +252,8 @@ export default function Admin() {
         </div>
 
         {error && (
-          <div className="alert alert-warning alert-dismissible fade show" role="alert">
-            <strong>Warning!</strong> {error}
+          <div className={`alert ${error.includes('Some data may be incomplete') ? 'alert-info' : 'alert-warning'} alert-dismissible fade show`} role="alert">
+            <strong>{error.includes('Some data may be incomplete') ? 'Info:' : 'Warning!'}</strong> {error}
             <button 
               type="button" 
               className="btn-close" 

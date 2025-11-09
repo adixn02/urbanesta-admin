@@ -23,7 +23,7 @@ const nextConfig = {
       },
       {
         protocol: 'https',
-        hostname: 'dhkq2r1k6k5w8.cloudfront.net',
+        hostname: 'd8pw2hr56z2an.cloudfront.net',
         port: '',
         pathname: '/img-assets/**',
       },

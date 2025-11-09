@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import ExcelJS from "exceljs";
 import { authenticateJWT } from "../middleware/jwtAuth.js";
 import { requireUserManagementAccess } from "../middleware/roleAuth.js";
+import { escapeRegex } from "../utils/sanitize.js";
 import { logActivity } from "../middleware/activityLogger.js";
 
 const router = express.Router();
@@ -21,9 +22,10 @@ router.get("/", logActivity, async (req, res) => {
     if (role) filter.role = role;
     if (isActive !== undefined) filter.isActive = isActive === 'true';
     if (search) {
+      const escapedSearch = escapeRegex(search);
       filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
+        { name: { $regex: escapedSearch, $options: 'i' } },
+        { email: { $regex: escapedSearch, $options: 'i' } }
       ];
     }
     
@@ -61,11 +63,10 @@ router.get("/", logActivity, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching users:', error);
+    logger.error('Error fetching users:', { error: error.message });
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch users',
-      details: error.message
+      error: 'Failed to fetch users'
     });
   }
 });

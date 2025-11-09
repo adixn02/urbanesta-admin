@@ -10,8 +10,10 @@ export const securityConfig = {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],
+        // Removed 'unsafe-inline' - use nonces or external stylesheets
+        styleSrc: ["'self'", "https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
+        // Removed 'unsafe-inline' and 'unsafe-eval' - use external scripts or nonces
+        scriptSrc: ["'self'", "https://cdn.jsdelivr.net"],
         imgSrc: ["'self'", "data:", "https:", "blob:"],
         fontSrc: ["'self'", "https://cdn.jsdelivr.net", "https://fonts.gstatic.com"],
         connectSrc: ["'self'"],

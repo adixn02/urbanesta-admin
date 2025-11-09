@@ -3,6 +3,7 @@ import Admin from '../models/Admin.js';
 import ActivityLog from '../models/ActivityLog.js';
 import { authenticateJWT } from '../middleware/jwtAuth.js';
 import { requireAdmin, requireRole } from '../middleware/roleAuth.js';
+import { escapeRegex } from '../utils/sanitize.js';
 import { logActivity } from '../middleware/activityLogger.js';
 
 const router = express.Router();
@@ -28,13 +29,14 @@ router.get('/users', requireAdmin, async (req, res) => {
     }
     
     if (search) {
+      const escapedSearch = escapeRegex(search);
       filter.$and = [
         { $or: [{ role: 'admin' }, { role: 'subadmin' }] },
         {
           $or: [
-            { name: { $regex: search, $options: 'i' } },
-            { phoneNumber: { $regex: search, $options: 'i' } },
-            { email: { $regex: search, $options: 'i' } }
+            { name: { $regex: escapedSearch, $options: 'i' } },
+            { phoneNumber: { $regex: escapedSearch, $options: 'i' } },
+            { email: { $regex: escapedSearch, $options: 'i' } }
           ]
         }
       ];
@@ -61,7 +63,7 @@ router.get('/users', requireAdmin, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching admin users:', error);
+    logger.error('Error fetching admin users:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch admin users'
@@ -172,7 +174,7 @@ router.post('/users', requireAdmin, logActivity, async (req, res) => {
       message: `${role} user created successfully`
     });
   } catch (error) {
-    console.error('Error creating admin user:', error);
+    logger.error('Error creating admin user:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to create admin user'

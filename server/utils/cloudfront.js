@@ -1,8 +1,10 @@
 // backend/utils/cloudfront.js
 // Utility to convert S3 URLs to CloudFront URLs
 
-const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN || "https://dhkq2r1k6k5w8.cloudfront.net";
-const S3_BUCKET = process.env.AWS_S3_BUCKET || "urbanesta-assets";
+import logger from './logger.js';
+
+const CLOUDFRONT_DOMAIN = process.env.CLOUDFRONT_DOMAIN || "https://d8pw2hr56z2an.cloudfront.net";
+const S3_BUCKET = process.env.AWS_S3_BUCKET || "urbanesta-realtors";
 
 /**
  * Convert S3 URL to CloudFront URL
@@ -36,7 +38,7 @@ export function convertToCloudFrontUrl(s3Url) {
         return `${CLOUDFRONT_DOMAIN}/${key}`;
       }
     } catch (error) {
-      console.error('Error converting S3 URL to CloudFront:', error);
+      logger.error('Error converting S3 URL to CloudFront:', { error: error.message });
     }
   }
   
@@ -71,7 +73,7 @@ export function convertToS3Url(cloudfrontUrl) {
       const region = process.env.AWS_REGION || 'ap-south-1';
       return `https://${S3_BUCKET}.s3.${region}.amazonaws.com/${key}`;
     } catch (error) {
-      console.error('Error converting CloudFront URL to S3:', error);
+      logger.error('Error converting CloudFront URL to S3:', { error: error.message });
     }
   }
   

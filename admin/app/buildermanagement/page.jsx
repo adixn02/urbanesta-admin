@@ -8,6 +8,7 @@ import Header from "@/components/header";
 import Sidebar from "@/components/sidebar";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Image from "next/image";
+import UploadProgress from "@/components/UploadProgress";
 import {
   DndContext,
   closestCenter,
@@ -119,6 +120,13 @@ const handleSignOut = async () => {
   const [backgroundFile, setBackgroundFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [formErrors, setFormErrors] = useState({});
+  const [uploadProgress, setUploadProgress] = useState({
+    visible: false,
+    status: 'uploading',
+    message: '',
+    files: [],
+    progress: 0
+  });
 
   function emptyForm() {
     return {
@@ -272,10 +280,67 @@ const handleSignOut = async () => {
       let backgroundUrl = formData.backgroundImage;
 
       if (logoFile || backgroundFile) {
+        // Show upload progress
+        const filesToUpload = [];
+        if (logoFile) filesToUpload.push({ name: logoFile.name, status: 'uploading' });
+        if (backgroundFile) filesToUpload.push({ name: backgroundFile.name, status: 'uploading' });
+        
+        setUploadProgress({
+          visible: true,
+          status: 'uploading',
+          message: 'Uploading images to server...',
+          files: filesToUpload,
+          progress: 0
+        });
+
+        // Simulate progress (since we can't track actual upload progress with fetch)
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+          progress += 10;
+          if (progress < 90) {
+            setUploadProgress(prev => ({ ...prev, progress }));
+          }
+        }, 200);
+
+        try {
         const uploadedFiles = await uploadBuilderImages(logoFile, backgroundFile);
         logoUrl = uploadedFiles.logo || logoUrl;
         backgroundUrl = uploadedFiles.backgroundImage || backgroundUrl;
+          
+          clearInterval(progressInterval);
+          
+          // Update progress to show completion
+          setUploadProgress({
+            visible: true,
+            status: 'uploading',
+            message: 'Images uploaded successfully!',
+            files: filesToUpload.map(f => ({ ...f, status: 'completed' })),
+            progress: 100
+          });
+          
+          // Wait a moment before showing "saving" status
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (uploadError) {
+          clearInterval(progressInterval);
+          setUploadProgress({
+            visible: true,
+            status: 'error',
+            message: uploadError.message || 'Failed to upload images',
+            files: filesToUpload.map(f => ({ ...f, status: 'error' })),
+            progress: 0
+          });
+          throw uploadError;
+        }
       }
+
+      // Show saving progress
+      setUploadProgress({
+        visible: true,
+        status: 'saving',
+        message: 'Saving builder data...',
+        files: [],
+        progress: 0
+      });
 
       // Prepare builder data (exclude specialties)
       const builderData = {
@@ -309,6 +374,21 @@ const handleSignOut = async () => {
           ? result.data
           : result;
 
+        // Show success
+        setUploadProgress({
+          visible: true,
+          status: 'success',
+          message: editingBuilder ? 'Builder updated successfully!' : 'Builder created successfully!',
+          files: [],
+          progress: 100
+        });
+
+        // Wait a moment to show success message
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        // Hide progress modal
+        setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+
         if (editingBuilder) {
           setBuilders(
             builders.map((b) =>
@@ -329,9 +409,29 @@ const handleSignOut = async () => {
         showNotification(editingBuilder ? 'Builder updated successfully!' : 'Builder created successfully!', 'success');
       } else {
         const errorData = await response.json();
+        setUploadProgress({
+          visible: true,
+          status: 'error',
+          message: errorData.error || 'Failed to save builder',
+          files: [],
+          progress: 0
+        });
+        setTimeout(() => {
+          setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+        }, 3000);
         showNotification(errorData.error || 'Failed to save builder', 'danger');
       }
     } catch (error) {
+      setUploadProgress({
+        visible: true,
+        status: 'error',
+        message: error.message || 'Failed to save builder. Please try again.',
+        files: [],
+        progress: 0
+      });
+      setTimeout(() => {
+        setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+      }, 3000);
       showNotification("Failed to save builder. Please try again.", 'danger');
     } finally {
       setIsUploading(false);
@@ -845,6 +945,13 @@ const handleSignOut = async () => {
     )}
         </div>
       </div>
+      <UploadProgress
+        isVisible={uploadProgress.visible}
+        status={uploadProgress.status}
+        message={uploadProgress.message}
+        files={uploadProgress.files}
+        progress={uploadProgress.progress}
+      />
     </ProtectedRoute>
   );
 }

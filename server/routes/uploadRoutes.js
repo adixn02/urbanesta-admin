@@ -3,6 +3,7 @@ import express from "express";
 import upload, { processUploadedFiles } from "../middleware/upload.js";
 import { convertToCloudFrontUrl } from "../utils/cloudfront.js";
 import path from "path";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -10,7 +11,7 @@ const router = express.Router();
 router.post("/single", (req, res) => {
   upload.single("image")(req, res, async (err) => {
     if (err) {
-      console.error("Upload middleware error:", err);
+      logger.error("Upload middleware error:", { error: err.message });
       return res.status(500).json({ error: err.message });
     }
     
@@ -28,46 +29,64 @@ router.post("/single", (req, res) => {
       let imageUrl;
       if (req.file.location) {
         // S3 storage
-        console.log("File uploaded successfully to S3:", req.file.location);
+        logger.info("File uploaded successfully to S3:", { location: req.file.location });
         imageUrl = convertToCloudFrontUrl(req.file.location);
-        console.log("CloudFront URL:", imageUrl);
+        logger.debug("CloudFront URL:", { url: imageUrl });
       } else {
         // Local storage
-        console.log("File uploaded successfully to local storage:", req.file.filename);
+        logger.info("File uploaded successfully to local storage:", { filename: req.file.filename });
         imageUrl = `/uploads/${req.file.filename}`;
-        console.log("Local URL:", imageUrl);
+        logger.debug("Local URL:", { url: imageUrl });
       }
       
       res.json({ imageUrl });
     } catch (error) {
-      console.error("Upload error:", error);
+      logger.error("Upload error:", { error: error.message });
       res.status(500).json({ error: error.message });
     }
   });
 });
 
 // Multiple files upload (array)
-router.post("/multiple", upload.array("images", 5), async (req, res) => {
-  try {
-    // Process uploaded files for WebP compression (for local storage)
-    if (req.files && req.files.length > 0 && !req.files[0].location) {
-      await processUploadedFiles(req, res, () => {});
+router.post("/multiple", (req, res) => {
+  upload.array("images", 5)(req, res, async (err) => {
+    if (err) {
+      logger.error("Upload middleware error:", { error: err.message });
+      return res.status(400).json({ 
+        error: err.message || "File upload failed",
+        details: err.message,
+        type: "UPLOAD_ERROR"
+      });
     }
     
-    const urls = req.files.map((file) => {
-      if (file.location) {
-        // S3 storage
-        return convertToCloudFrontUrl(file.location);
-      } else {
-        // Local storage
-        return `/uploads/${file.filename}`;
+    try {
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: "No files uploaded" });
       }
-    });
-    res.json({ imageUrls: urls });
-  } catch (error) {
-    console.error("Multiple upload error:", error);
-    res.status(500).json({ error: error.message });
-  }
+      
+      // Process uploaded files for WebP compression (for local storage)
+      if (req.files && req.files.length > 0 && !req.files[0].location) {
+        await processUploadedFiles(req, res, () => {});
+      }
+      
+      const urls = req.files.map((file) => {
+        if (file.location) {
+          // S3 storage
+          return convertToCloudFrontUrl(file.location);
+        } else {
+          // Local storage
+          return `/uploads/${file.filename}`;
+        }
+      });
+      res.json({ imageUrls: urls });
+    } catch (error) {
+      logger.error("Multiple upload error:", { error: error.message, stack: error.stack });
+      res.status(500).json({ 
+        error: error.message || "Failed to process uploaded files",
+        type: "PROCESSING_ERROR"
+      });
+    }
+  });
 });
 
 // Multiple fields upload (for builder form - logo + backgroundImage)
@@ -77,7 +96,7 @@ router.post("/builder", (req, res) => {
     { name: "backgroundImage", maxCount: 1 },
   ])(req, res, async (err) => {
     if (err) {
-      console.error("Upload middleware error:", err);
+      logger.error("Upload middleware error:", { error: err.message });
       return res.status(500).json({ 
         error: "Upload failed", 
         details: err.message,
@@ -115,10 +134,10 @@ router.post("/builder", (req, res) => {
         },
       };
 
-      console.log("Builder files uploaded:", response.files);
+      logger.info("Builder files uploaded:", { files: response.files });
       res.json(response);
     } catch (err) {
-      console.error("Upload processing error:", err);
+      logger.error("Upload processing error:", { error: err.message });
       res.status(500).json({ 
         error: "Upload processing failed", 
         details: err.message,

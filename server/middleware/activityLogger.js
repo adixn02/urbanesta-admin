@@ -1,5 +1,6 @@
 import ActivityLog from '../models/ActivityLog.js';
 import User from '../models/User.js';
+import logger from '../utils/logger.js';
 
 // Middleware to log activities
 export const logActivity = async (req, res, next) => {
@@ -30,7 +31,7 @@ export const logActivity = async (req, res, next) => {
             });
           }
         } catch (error) {
-          console.error('Error logging activity:', error);
+          logger.error('Error logging activity:', { error: error.message });
         }
       });
       
@@ -40,7 +41,7 @@ export const logActivity = async (req, res, next) => {
     
     next();
   } catch (error) {
-    console.error('Activity logger middleware error:', error);
+    logger.error('Activity logger middleware error:', { error: error.message });
     next();
   }
 };
@@ -66,7 +67,7 @@ export const logUserActivity = async (userId, action, resource, details, req) =>
       metadata: {}
     });
   } catch (error) {
-    console.error('Error logging user activity:', error);
+    logger.error('Error logging user activity:', { error: error.message });
   }
 };
 
@@ -91,7 +92,7 @@ export const logSecurityEvent = async (userId, action, details, severity = 'high
       metadata: {}
     });
   } catch (error) {
-    console.error('Error logging security event:', error);
+    logger.error('Error logging security event:', { error: error.message });
   }
 };
 
@@ -113,6 +114,6 @@ export const logUnauthorizedAccess = async (phoneNumber, action, details, req) =
       metadata: { attemptedAction: action }
     });
   } catch (error) {
-    console.error('Error logging unauthorized access:', error);
+    logger.error('Error logging unauthorized access:', { error: error.message });
   }
 };

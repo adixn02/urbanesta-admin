@@ -3,6 +3,7 @@ import Lead from "../models/Lead.js";
 import XLSX from "xlsx";
 import { authenticateJWT } from "../middleware/jwtAuth.js";
 import { requireLeadsAccess } from "../middleware/roleAuth.js";
+import { escapeRegex } from "../utils/sanitize.js";
 import { logActivity } from "../middleware/activityLogger.js";
 
 const router = express.Router();
@@ -193,11 +194,8 @@ router.get("/", logActivity, async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit));
     
-    console.log('Found leads:', leads.length);
-    
     // Get total count for pagination
     const total = await Lead.countDocuments(filter);
-    console.log('Total count:', total);
     
     res.json({
       success: true,

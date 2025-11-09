@@ -6,6 +6,7 @@ import crypto from "crypto";
 import path from "path";
 import fs from "fs";
 import { processImageFile, isSupportedImage, getWebPFileName } from "../utils/imageCompression.js";
+import logger from "../utils/logger.js";
 
 // Function to check if AWS credentials are available
 const checkAwsCredentials = () => {
@@ -16,19 +17,16 @@ const checkAwsCredentials = () => {
 const createUploadMiddleware = () => {
   const hasAwsCredentials = checkAwsCredentials();
   
-  console.log("🔍 AWS Credentials Check:");
-  console.log("AWS_ACCESS_KEY_ID:", process.env.AWS_ACCESS_KEY_ID ? "✅ Found" : "❌ Missing");
-  console.log("AWS_SECRET_ACCESS_KEY:", process.env.AWS_SECRET_ACCESS_KEY ? "✅ Found" : "❌ Missing");
-  console.log("AWS_REGION:", process.env.AWS_REGION || "❌ Missing");
-  console.log("AWS_S3_BUCKET:", process.env.AWS_S3_BUCKET || "❌ Missing");
+  logger.info("AWS Credentials Check:", {
+    hasAccessKey: !!process.env.AWS_ACCESS_KEY_ID,
+    hasSecretKey: !!process.env.AWS_SECRET_ACCESS_KEY,
+    region: process.env.AWS_REGION || "Missing",
+    bucket: process.env.AWS_S3_BUCKET || "Missing"
+  });
 
   if (!hasAwsCredentials) {
-    console.warn("⚠️  AWS credentials not found. Using local file storage as fallback.");
-    console.warn("To use S3 storage, create a .env file in the server directory with:");
-    console.warn("AWS_REGION=ap-south-1");
-    console.warn("AWS_ACCESS_KEY_ID=your_access_key_here");
-    console.warn("AWS_SECRET_ACCESS_KEY=your_secret_key_here");
-    console.warn("AWS_S3_BUCKET=urbanesta-assets");
+    logger.warn("AWS credentials not found. Using local file storage as fallback.");
+    logger.warn("To use S3 storage, configure AWS credentials in environment variables.");
   }
 
   let upload;
@@ -74,7 +72,7 @@ const createUploadMiddleware = () => {
                   cb(null, processedFile.buffer);
                 })
                 .catch(error => {
-                  console.error('WebP compression error:', error);
+                  logger.error('WebP compression error:', { error: error.message });
                   cb(error);
                 });
             } else {
@@ -85,7 +83,32 @@ const createUploadMiddleware = () => {
         }]
       }),
       fileFilter: (req, file, cb) => {
-        cb(null, true);
+        // Validate MIME types - only allow images
+        const allowedMimes = [
+          'image/jpeg',
+          'image/jpg', 
+          'image/png',
+          'image/webp',
+          'image/gif',
+          'image/avif', // AVIF format support
+          'image/x-png', // Some browsers send this for PNG
+          'image/pjpeg' // Some browsers send this for JPEG
+        ];
+        
+        // Also check file extension as fallback (some browsers don't set MIME type correctly)
+        const fileExtension = file.originalname.toLowerCase().split('.').pop();
+        const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif'];
+        
+        if (allowedMimes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) {
+          cb(null, true);
+        } else {
+          logger.warn('File upload rejected:', { 
+            mimetype: file.mimetype, 
+            filename: file.originalname,
+            extension: fileExtension 
+          });
+          cb(new Error(`Invalid file type. Please upload only image files (JPEG, PNG, WebP, GIF, or AVIF format).`));
+        }
       },
       limits: {
         fileSize: 10 * 1024 * 1024, // 10MB limit
@@ -111,7 +134,32 @@ const createUploadMiddleware = () => {
         },
       }),
       fileFilter: (req, file, cb) => {
-        cb(null, true);
+        // Validate MIME types - only allow images
+        const allowedMimes = [
+          'image/jpeg',
+          'image/jpg', 
+          'image/png',
+          'image/webp',
+          'image/gif',
+          'image/avif', // AVIF format support
+          'image/x-png', // Some browsers send this for PNG
+          'image/pjpeg' // Some browsers send this for JPEG
+        ];
+        
+        // Also check file extension as fallback (some browsers don't set MIME type correctly)
+        const fileExtension = file.originalname.toLowerCase().split('.').pop();
+        const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif'];
+        
+        if (allowedMimes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) {
+          cb(null, true);
+        } else {
+          logger.warn('File upload rejected:', { 
+            mimetype: file.mimetype, 
+            filename: file.originalname,
+            extension: fileExtension 
+          });
+          cb(new Error(`Invalid file type. Please upload only image files (JPEG, PNG, WebP, GIF, or AVIF format).`));
+        }
       },
       limits: {
         fileSize: 10 * 1024 * 1024, // 10MB limit
@@ -128,7 +176,7 @@ export const processUploadedFiles = async (req, res, next) => {
     if (req.file) {
       // Process single file
       if (isSupportedImage(req.file.mimetype)) {
-        console.log(`🖼️  Processing image: ${req.file.originalname}`);
+        logger.debug(`Processing image: ${req.file.originalname}`);
         const processedFile = await processImageFile(req.file, { 
           quality: 85, 
           maxWidth: 1920, 
@@ -145,7 +193,7 @@ export const processUploadedFiles = async (req, res, next) => {
           processedFiles[fieldName] = [];
           for (const file of files) {
             if (isSupportedImage(file.mimetype)) {
-              console.log(`🖼️  Processing image: ${file.originalname}`);
+              logger.debug(`Processing image: ${file.originalname}`);
               const processedFile = await processImageFile(file, { 
                 quality: 85, 
                 maxWidth: 1920, 
@@ -159,7 +207,7 @@ export const processUploadedFiles = async (req, res, next) => {
         } else {
           // Single file in field
           if (isSupportedImage(files.mimetype)) {
-            console.log(`🖼️  Processing image: ${files.originalname}`);
+            logger.debug(`Processing image: ${files.originalname}`);
             const processedFile = await processImageFile(files, { 
               quality: 85, 
               maxWidth: 1920, 
@@ -177,7 +225,7 @@ export const processUploadedFiles = async (req, res, next) => {
     
     next();
   } catch (error) {
-    console.error('❌ Error processing uploaded files:', error);
+    logger.error('Error processing uploaded files:', { error: error.message });
     next(error);
   }
 };

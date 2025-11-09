@@ -3,6 +3,7 @@ import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
+import compression from "compression";
 
 // Load environment variables - prefer .env if exists, otherwise use env.development/env.production
 import { existsSync } from 'node:fs';
@@ -27,16 +28,21 @@ import propertyViewRoutes from "./routes/propertyViewRoutes.js";
 import activityLogRoutes from "./routes/activityLogRoutes.js";
 import { securityConfig, validateRequest } from "./middleware/security.js";
 import logger from "./utils/logger.js";
+import { validateRequiredEnv } from "./config/validateEnv.js";
 
 const app = express();
 const PORT = process.env.PORT || 3002;
-const MONGODB_URL = process.env.MONGODB_URL;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-if (!MONGODB_URL) {
-  console.error("❌ MONGODB_URL environment variable is required");
+// Validate environment variables at startup
+try {
+  validateRequiredEnv();
+} catch (error) {
+  logger.error("Environment validation failed:", { error: error.message });
   process.exit(1);
 }
+
+const MONGODB_URL = process.env.MONGODB_URL;
 
 // Security Middleware - Apply Helmet first
 app.use(securityConfig.helmet);
@@ -49,8 +55,13 @@ app.set('trust proxy', 1);
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
   : (NODE_ENV === 'production' 
-      ? ['http://localhost', 'https://localhost'] 
+      ? [] // No default origins in production - must be explicitly set
       : ['http://localhost:3000', 'http://localhost:3001']);
+
+// Warn if no CORS origins configured in production
+if (NODE_ENV === 'production' && allowedOrigins.length === 0) {
+  logger.warn('No CORS origins configured in production. Set ALLOWED_ORIGINS environment variable.');
+}
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -59,8 +70,23 @@ app.use(cors({
     
     // Check if origin matches any allowed origin
     const isAllowed = allowedOrigins.some(allowed => {
-      // Support both exact match and prefix match (for ports)
-      return origin === allowed || origin.startsWith(allowed);
+      // Exact match
+      if (origin === allowed) return true;
+      
+      // Support wildcard subdomain matching (e.g., *.example.com)
+      if (allowed.startsWith('*.')) {
+        const domain = allowed.slice(2); // Remove '*.' prefix
+        return origin.endsWith('.' + domain) || origin === domain;
+      }
+      
+      // For development, allow localhost with any port
+      if (NODE_ENV === 'development' && allowed.includes('localhost')) {
+        const allowedHost = allowed.split(':')[0]; // Extract hostname
+        const originHost = origin.split(':')[0];
+        if (allowedHost === originHost) return true;
+      }
+      
+      return false;
     });
     
     if (isAllowed) {
@@ -76,6 +102,34 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Key']
+}));
+
+// Request timeout middleware - prevent hanging requests
+app.use((req, res, next) => {
+  req.setTimeout(30000, () => {
+    logger.warn('Request timeout:', { path: req.path, method: req.method });
+    if (!res.headersSent) {
+      res.status(408).json({
+        success: false,
+        error: 'Request timeout. Please try again.'
+      });
+    }
+  });
+  next();
+});
+
+// Compression middleware for response compression
+app.use(compression({
+  filter: (req, res) => {
+    // Don't compress responses if client doesn't support it
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    // Use compression filter function
+    return compression.filter(req, res);
+  },
+  level: 6, // Compression level (1-9, 6 is a good balance)
+  threshold: 1024 // Only compress responses larger than 1KB
 }));
 
 // Request body parsing with size limits

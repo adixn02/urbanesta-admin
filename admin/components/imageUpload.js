@@ -1,92 +1,170 @@
 'use client';
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 export default function ImageUpload({ label, value, onChange }) {
-  const [image, setImage] = useState(value || "");
-  const [isUploading, setIsUploading] = useState(false);
+  const [preview, setPreview] = useState("");
+  const [file, setFile] = useState(null);
+  const blobUrlRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const hasLocalFileRef = useRef(false);
 
-  const handleFileChange = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsUploading(true);
-
-    try {
-      const formData = new FormData();
-      formData.append('image', file);
-
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002'}/api/upload/single`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('Upload failed');
-      }
-
-      const data = await response.json();
-      const imageUrl = data.imageUrl;
-      
-      setImage(imageUrl);
-      onChange && onChange(imageUrl);
-    } catch (error) {
-      console.error('Upload error:', error);
-      alert('Failed to upload image. Please try again.');
-    } finally {
-      setIsUploading(false);
+  // Sync preview with value prop (for existing images)
+  useEffect(() => {
+    if (hasLocalFileRef.current) {
+      return; // Keep the local file preview
     }
+
+    if (value) {
+      if (value instanceof File) {
+        if (blobUrlRef.current) {
+          URL.revokeObjectURL(blobUrlRef.current);
+        }
+        const blobUrl = URL.createObjectURL(value);
+        blobUrlRef.current = blobUrl;
+        setPreview(blobUrl);
+        setFile(value);
+        hasLocalFileRef.current = true;
+      } else if (typeof value === 'string' && value.trim() !== '') {
+        let trimmedValue = value.trim();
+        if (trimmedValue.startsWith('//')) {
+          trimmedValue = 'https:' + trimmedValue;
+        } else if (!trimmedValue.startsWith('http://') && 
+                   !trimmedValue.startsWith('https://') && 
+                   !trimmedValue.startsWith('/') &&
+                   !trimmedValue.startsWith('blob:') &&
+                   trimmedValue.includes('.')) {
+          if (trimmedValue.split(' ').length === 1 && trimmedValue.includes('.')) {
+            trimmedValue = 'https://' + trimmedValue;
+          }
+        }
+        setPreview(trimmedValue);
+        setFile(null);
+        hasLocalFileRef.current = false;
+      }
+    } else {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+      setPreview("");
+      setFile(null);
+      hasLocalFileRef.current = false;
+      }
+  }, [value]);
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+      }
+    };
+  }, []);
+
+  const handleFileChange = (event) => {
+    const selectedFile = event.target.files?.[0];
+    if (!selectedFile) return;
+
+    // Cleanup previous blob URL if exists
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+    }
+
+    setFile(selectedFile);
+    hasLocalFileRef.current = true;
+
+    // Create preview URL
+    const previewUrl = URL.createObjectURL(selectedFile);
+    blobUrlRef.current = previewUrl;
+    setPreview(previewUrl);
+    
+    // Call onChange with the file object (not URL) - upload will happen on save
+    onChange && onChange(selectedFile);
   };
 
   const removeImage = () => {
-    setImage("");
-    onChange && onChange("");
+    // Cleanup blob URL
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+    setFile(null);
+    setPreview("");
+    hasLocalFileRef.current = false;
+    // Clear the file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    onChange && onChange(null);
   };
 
   return (
     <div className="mb-3">
       {label && <label className="form-label fw-semibold text-dark">{label}</label>}
 
-      <div className="d-flex align-items-center gap-3">
+      <div className="d-flex align-items-center gap-3 mb-2">
         <input
+          ref={fileInputRef}
           type="file"
           accept="image/*,.webp"
           onChange={handleFileChange}
-          disabled={isUploading}
           className="form-control"
+          style={{ flex: 1 }}
         />
 
-        {image && (
+        {preview && (
           <button
             type="button"
             onClick={removeImage}
             className="btn btn-sm btn-outline-danger"
+            title="Remove image"
           >
             Remove
           </button>
         )}
       </div>
 
-      {isUploading && (
-        <div className="d-flex align-items-center gap-2 mt-2">
-          <div
-            className="spinner-border spinner-border-sm text-primary"
-            role="status"
-          >
-            <span className="visually-hidden">Loading...</span>
-          </div>
-          <span className="small text-muted">Uploading...</span>
-        </div>
-      )}
-
-      {image && (
+      {preview && (
         <div className="mt-3">
+          <div className="d-flex align-items-center gap-3">
+            <div className="position-relative">
           <img
-            src={image}
+                src={preview}
             alt="Preview"
-            className="img-thumbnail"
-            style={{ width: "128px", height: "128px", objectFit: "cover" }}
+                className="img-thumbnail border"
+                style={{ 
+                  width: "200px", 
+                  height: "200px", 
+                  objectFit: "cover",
+                  cursor: "pointer",
+                  display: "block"
+                }}
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                  if (!e.target.parentElement.querySelector('.image-error')) {
+                    const errorDiv = document.createElement('div');
+                    errorDiv.className = 'text-danger small image-error';
+                    errorDiv.textContent = 'Failed to load image preview';
+                    e.target.parentElement.appendChild(errorDiv);
+                  }
+                }}
           />
+            </div>
+            <div className="flex-grow-1">
+              <p className="mb-1 small text-muted">
+                <i className="bi bi-check-circle text-success me-1"></i>
+                Image selected
+              </p>
+              {file && (
+                <p className="mb-0 small text-muted">
+                  <strong>File:</strong> {file.name}<br/>
+                  <strong>Size:</strong> {(file.size / 1024).toFixed(2)} KB<br/>
+                  <strong>Type:</strong> {file.type}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

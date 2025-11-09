@@ -1,4 +1,5 @@
 import Admin from '../models/Admin.js';
+import logger from '../utils/logger.js';
 
 // Middleware to require admin role
 export const requireAdmin = async (req, res, next) => {
@@ -29,7 +30,7 @@ export const requireAdmin = async (req, res, next) => {
     req.userPermissions = user.permissions;
     next();
   } catch (error) {
-    console.error('Admin role check error:', error);
+    logger.error('Admin role check error:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Role verification failed'
@@ -67,7 +68,7 @@ export const requireRole = (allowedRoles) => {
       req.userPermissions = user.permissions;
       next();
     } catch (error) {
-      console.error('Role check error:', error);
+      logger.error('Role check error:', { error: error.message });
       res.status(500).json({
         success: false,
         error: 'Role verification failed'
@@ -114,7 +115,7 @@ export const requirePermission = (permission) => {
       req.userPermissions = user.permissions;
       next();
     } catch (error) {
-      console.error('Permission check error:', error);
+      logger.error('Permission check error:', { error: error.message });
       res.status(500).json({
         success: false,
         error: 'Permission verification failed'
@@ -153,7 +154,7 @@ export const requireLeadsAccess = async (req, res, next) => {
     req.userPermissions = user.permissions;
     next();
   } catch (error) {
-    console.error('Leads access check error:', error);
+    logger.error('Leads access check error:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Access verification failed'
@@ -191,7 +192,7 @@ export const requireUserManagementAccess = async (req, res, next) => {
     req.userPermissions = user.permissions;
     next();
   } catch (error) {
-    console.error('User management access check error:', error);
+    logger.error('User management access check error:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Access verification failed'
@@ -229,7 +230,7 @@ export const requireAdminOrSubAdmin = async (req, res, next) => {
     req.userPermissions = user.permissions;
     next();
   } catch (error) {
-    console.error('Admin/SubAdmin access check error:', error);
+    logger.error('Admin/SubAdmin access check error:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Access verification failed'

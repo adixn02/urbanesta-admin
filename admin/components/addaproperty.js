@@ -4,8 +4,9 @@ import FilePreview from './filePreview';
 import MultipleFilePreview from './multipleFilePreview';
 import { ButtonSpinner } from './LoadingSpinner';
 import UploadProgress from './UploadProgress';
+import ErrorPopup from './ErrorPopup';
 
-export default function AddPropertyForm({ property, onSave, isLoading = false, dropdownData = { categories: [], cities: [], builders: [] } }) {
+export default function AddPropertyForm({ property, onSave, isLoading = false, dropdownData = { categories: [], cities: [], builders: [] }, onSaveSuccess, onSaveError }) {
   const isEditing = !!property?._id || !!property?.id;
 
   // Helper function to get nested property values
@@ -99,7 +100,164 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
   });
 
   const [errors, setErrors] = useState({});
-  const [uploadProgress, setUploadProgress] = useState({ isVisible: false, progress: 0, message: 'Uploading...' });
+
+  // Clear errors when formData changes (especially when editing property)
+  useEffect(() => {
+    if (property && formData.city && formData.locality) {
+      // Clear locality error when data is loaded
+      setErrors(prev => {
+        const newErrors = { ...prev };
+        if (newErrors.locality) {
+          delete newErrors.locality;
+        }
+        return newErrors;
+      });
+    }
+  }, [property, formData.city, formData.locality, dropdownData.cities]);
+  // Error popup state
+  const [errorPopup, setErrorPopup] = useState({
+    visible: false,
+    title: 'Error',
+    message: '',
+    details: null
+  });
+
+  // Helper function to make error messages user-friendly (hide technical details)
+  const makeUserFriendlyError = (errorMessage) => {
+    if (!errorMessage) return 'An error occurred. Please try again.';
+    
+    // Remove technical MIME type references like "image/avif"
+    let friendly = errorMessage
+      .replace(/image\/\w+/gi, '') // Remove all "image/xxx" references
+      .replace(/Invalid file type:.*?\. Only/, 'Invalid file type. Please upload only')
+      .replace(/\. Only image files \(.*?\) are allowed\./g, ' image files (JPEG, PNG, WebP, GIF, or AVIF format).')
+      .replace(/Invalid file type\. Please upload only\s+image files/, 'Invalid file type. Please upload only image files')
+      .replace(/\s+/g, ' ') // Remove extra spaces
+      .trim();
+    
+    // If message is empty after cleaning, provide default
+    if (!friendly || friendly.length < 10) {
+      friendly = 'Invalid file type. Please upload only image files (JPEG, PNG, WebP, GIF, or AVIF format).';
+    }
+    
+    return friendly;
+  };
+
+  const [uploadProgress, setUploadProgress] = useState({ 
+    visible: false, 
+    status: 'uploading', 
+    message: '', 
+    files: [], 
+    progress: 0 
+  });
+
+  // Sync formData when property prop changes (e.g., when editing different property)
+  useEffect(() => {
+    if (property) {
+      setFormData({
+        // Basic info
+        _id: property._id || property.id || '',
+        type: property.type || 'regular',
+        title: getPropertyValue('title', ''),
+        city: getPropertyValue('city._id') || getPropertyValue('city', ''),
+        locality: getPropertyValue('locality._id') || getPropertyValue('locality', ''),
+        location: getPropertyValue('location', ''),
+        category: getPropertyValue('category._id') || getPropertyValue('category', ''),
+        subcategory: getPropertyValue('subcategory', ''),
+        price: getPropertyValue('price', ''),
+        propertyAction: getPropertyValue('propertyAction', 'Sale'),
+        area: getPropertyValue('area', ''),
+        status: getPropertyValue('status', 'available'),
+        description: getPropertyValue('description', ''),
+        builder: getPropertyValue('builder._id') || getPropertyValue('builder', ''),
+        possessionDate: getPropertyValue('possessionDate', ''),
+        
+        // Arrays and complex fields
+        highlights: getArrayValue('highlights', ['']),
+        connectivityPoints: (() => {
+          const points = getArrayValue('connectivityPoints', [{ text: '' }]);
+          return points.map(point => 
+            typeof point === 'string' ? { text: point } : (point?.text !== undefined ? point : { text: '' })
+          );
+        })(),
+        images: getArrayValue('images', []),
+        projectImages: getArrayValue('projectImages', []),
+        
+        // Builder specific fields
+        projectName: getPropertyValue('projectName', ''),
+        projectLogo: getPropertyValue('projectLogo', ''),
+        wallpaperImage: getPropertyValue('wallpaperImage', ''),
+        fullAddress: getPropertyValue('fullAddress', ''),
+        googleMapUrl: getPropertyValue('googleMapUrl', ''),
+        landArea: getPropertyValue('landArea', ''),
+        descriptionImage: getPropertyValue('descriptionImage', ''),
+        highlightImage: getPropertyValue('highlightImage', ''),
+        masterPlan: getPropertyValue('masterPlan', ''),
+        
+        // Builder property specific fields
+        about: getPropertyValue('about', ''),
+        areaType: getPropertyValue('areaType', ''),
+        reraNo: getPropertyValue('reraNo', ''),
+        
+        // Unit details
+        unitDetails: getArrayValue('unitDetails', []),
+        
+        // Amenities and construction details
+        amenities: getArrayValue('amenities', []),
+        constructionDetails: getPropertyValue('constructionDetails', {
+          status: 'upcoming',
+          reraDescription: ''
+        }),
+        
+        // Configurations
+        selectedConfigurations: getArrayValue('selectedConfigurations', []),
+      });
+      setFormType(property.type || 'regular');
+    } else {
+      // Reset form when property is null (new property)
+      setFormData({
+        _id: '',
+        type: 'regular',
+        title: '',
+        city: '',
+        locality: '',
+        location: '',
+        category: '',
+        subcategory: '',
+        price: '',
+        propertyAction: 'Sale',
+        area: '',
+        status: 'available',
+        description: '',
+        builder: '',
+        possessionDate: '',
+        highlights: [''],
+        connectivityPoints: [{ text: '' }],
+        images: [],
+        projectImages: [],
+        projectName: '',
+        projectLogo: '',
+        wallpaperImage: '',
+        fullAddress: '',
+        googleMapUrl: '',
+        landArea: '',
+        descriptionImage: '',
+        highlightImage: '',
+        masterPlan: '',
+        about: '',
+        areaType: '',
+        reraNo: '',
+        unitDetails: [],
+        amenities: [],
+        constructionDetails: {
+          status: 'upcoming',
+          reraDescription: ''
+        },
+        selectedConfigurations: [],
+      });
+      setFormType('regular');
+    }
+  }, [property?._id, property?.id]); // Only re-run when property ID changes
   const [availableConfigurations, setAvailableConfigurations] = useState([]);
   const [loadingConfigurations, setLoadingConfigurations] = useState(false);
 
@@ -444,18 +602,31 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
       if (!formData.price || formData.price <= 0) newErrors.price = 'Valid price is required';
       
       // Only require locality if the selected city has localities available
+      // Don't validate if dropdown data isn't loaded yet (to avoid false errors when editing)
       const availableLocalities = getLocalities();
+      if (dropdownData.cities && dropdownData.cities.length > 0) {
+        // Only validate if we have dropdown data loaded
       if (availableLocalities.length > 0 && !formData.locality) {
         newErrors.locality = 'Locality is required';
+        } else if (formData.locality && availableLocalities.length > 0) {
+          // Validate that the selected locality exists in the available localities
+          const localityExists = availableLocalities.some(loc => loc._id === formData.locality || loc._id?.toString() === formData.locality?.toString());
+          if (!localityExists) {
+            // Locality doesn't match - might be from different city or data mismatch
+            // Only show error if we're sure the data is loaded
+            newErrors.locality = 'Selected locality is not available for this city. Please select a valid locality.';
+          }
+        }
       }
       
       if (!formData.location?.trim()) newErrors.location = 'Nearby location is required';
       // Google Map URL is optional for regular properties
-      if (!formData.projectImages || formData.projectImages.length < 2) {
-        newErrors.projectImages = 'At least 2 project images are required';
+      // For regular properties, images are stored in formData.images, not projectImages
+      if (!formData.images || formData.images.length < 2) {
+        newErrors.images = 'At least 2 property images are required';
       }
-      if (formData.projectImages && formData.projectImages.length > 5) {
-        newErrors.projectImages = 'Maximum 5 project images allowed';
+      if (formData.images && formData.images.length > 5) {
+        newErrors.images = 'Maximum 5 property images allowed';
       }
     }
 
@@ -528,39 +699,97 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
     if (!files || files.length === 0) return [];
 
     try {
-      setUploadProgress({ isVisible: true, progress: 0, message: 'Preparing upload...' });
+      // Show upload progress
+      const filesToUpload = files.map(file => ({ name: file.name, status: 'uploading' }));
+      setUploadProgress({ 
+        visible: true, 
+        status: 'uploading', 
+        message: 'Uploading images to server...', 
+        files: filesToUpload, 
+        progress: 0 
+      });
+
+      // Simulate progress
+      let progress = 0;
+      const progressInterval = setInterval(() => {
+        progress += 10;
+        if (progress < 90) {
+          setUploadProgress(prev => ({ ...prev, progress }));
+        }
+      }, 200);
       
       const formData = new FormData();
       files.forEach((file) => {
         formData.append('images', file);
       });
 
-      setUploadProgress({ isVisible: true, progress: 25, message: 'Uploading images...' });
-
+      const token = localStorage.getItem('token');
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002'}/api/upload/multiple`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
         body: formData,
       });
 
-      setUploadProgress({ isVisible: true, progress: 75, message: 'Processing upload...' });
+      clearInterval(progressInterval);
 
       if (!response.ok) {
-        throw new Error('Upload failed');
+        // Try to get error message from response
+        let errorMessage = 'Failed to upload images';
+        let errorDetails = null;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || errorMessage;
+          errorDetails = errorData.details || errorData.type || null;
+        } catch (e) {
+          // If response is not JSON, use status text
+          errorMessage = response.statusText || errorMessage;
+        }
+        
+        // Hide upload progress
+        setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+        
+        // Show error popup (doesn't auto-hide) - hide technical details
+        setErrorPopup({
+          visible: true,
+          title: 'Upload Error',
+          message: makeUserFriendlyError(errorMessage) || 'Failed to upload images. Please try again.',
+          details: null // Don't show technical details to users
+        });
+        
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
       
-      setUploadProgress({ isVisible: true, progress: 100, message: 'Upload complete!' });
+      // Update progress to show completion
+      setUploadProgress({ 
+        visible: true, 
+        status: 'uploading', 
+        message: 'Images uploaded successfully!', 
+        files: filesToUpload.map(f => ({ ...f, status: 'completed' })), 
+        progress: 100 
+      });
       
-      // Hide progress after a short delay
-      setTimeout(() => {
-        setUploadProgress({ isVisible: false, progress: 0, message: 'Uploading...' });
-      }, 1000);
+      // Wait a moment before hiding
+      await new Promise(resolve => setTimeout(resolve, 500));
+      setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
 
       return data.imageUrls || [];
     } catch (error) {
-      setUploadProgress({ isVisible: false, progress: 0, message: 'Uploading...' });
-      throw new Error('Failed to upload images. Please try again.');
+      // Hide upload progress
+      setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+      
+      // Show error popup (doesn't auto-hide) - hide technical details
+      setErrorPopup({
+        visible: true,
+        title: 'Upload Error',
+        message: makeUserFriendlyError(error.message) || 'Failed to upload images. Please try again.',
+        details: null // Don't show stack trace to users
+      });
+      
+      throw error; // Re-throw original error with message
     }
   };
 
@@ -568,37 +797,93 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
     if (!file) return null;
 
     try {
-      setUploadProgress({ isVisible: true, progress: 0, message: 'Preparing upload...' });
+      // Show upload progress
+      setUploadProgress({ 
+        visible: true, 
+        status: 'uploading', 
+        message: 'Uploading image...', 
+        files: [{ name: file.name, status: 'uploading' }], 
+        progress: 0 
+      });
+
+      // Simulate progress
+      let progress = 0;
+      const progressInterval = setInterval(() => {
+        progress += 15;
+        if (progress < 90) {
+          setUploadProgress(prev => ({ ...prev, progress }));
+        }
+      }, 200);
       
       const formData = new FormData();
       formData.append('image', file);
 
-      setUploadProgress({ isVisible: true, progress: 50, message: 'Uploading image...' });
-
+      const token = localStorage.getItem('token');
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002'}/api/upload/single`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
         body: formData,
       });
 
-      setUploadProgress({ isVisible: true, progress: 90, message: 'Processing upload...' });
+      clearInterval(progressInterval);
 
       if (!response.ok) {
-        throw new Error('Upload failed');
+        // Try to get error message from response
+        let errorMessage = 'Failed to upload image';
+        let errorDetails = null;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || errorMessage;
+          errorDetails = errorData.details || errorData.type || null;
+        } catch (e) {
+          errorMessage = response.statusText || errorMessage;
+        }
+        
+        // Hide upload progress
+        setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+        
+        // Show error popup (doesn't auto-hide) - hide technical details
+        setErrorPopup({
+          visible: true,
+          title: 'Upload Error',
+          message: makeUserFriendlyError(errorMessage) || 'Failed to upload images. Please try again.',
+          details: null // Don't show technical details to users
+        });
+        
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
       
-      setUploadProgress({ isVisible: true, progress: 100, message: 'Upload complete!' });
+      // Update progress to show completion
+      setUploadProgress({ 
+        visible: true, 
+        status: 'uploading', 
+        message: 'Image uploaded successfully!', 
+        files: [{ name: file.name, status: 'completed' }], 
+        progress: 100 
+      });
       
-      // Hide progress after a short delay
-      setTimeout(() => {
-        setUploadProgress({ isVisible: false, progress: 0, message: 'Uploading...' });
-      }, 1000);
+      // Wait a moment before hiding
+      await new Promise(resolve => setTimeout(resolve, 500));
+      setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
 
       return data.imageUrl || null;
     } catch (error) {
-      setUploadProgress({ isVisible: false, progress: 0, message: 'Uploading...' });
-      throw new Error('Failed to upload image. Please try again.');
+      // Hide upload progress
+      setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+      
+      // Show error popup (doesn't auto-hide) - hide technical details
+      setErrorPopup({
+        visible: true,
+        title: 'Upload Error',
+        message: makeUserFriendlyError(error.message) || 'Failed to upload image. Please try again.',
+        details: null // Don't show stack trace to users
+      });
+      
+      throw error; // Re-throw original error with message
     }
   };
 
@@ -620,13 +905,28 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
       if (formData.projectImages && formData.projectImages.length > 0) {
         // Check if images are file objects (new uploads) or URLs (existing images)
         const fileObjects = formData.projectImages.filter(img => img instanceof File);
-        const existingUrls = formData.projectImages.filter(img => typeof img === 'string');
+        const existingUrls = formData.projectImages.filter(img => typeof img === 'string' && img.trim() !== '');
         
         if (fileObjects.length > 0) {
           const uploadedUrls = await uploadFilesToS3(fileObjects);
           projectImageUrls = [...existingUrls, ...uploadedUrls];
         } else {
           projectImageUrls = existingUrls;
+        }
+      }
+
+      // Upload regular property images (for regular properties)
+      let regularImageUrls = [];
+      if (formType === 'regular' && formData.images && formData.images.length > 0) {
+        // Check if images are file objects (new uploads) or URLs (existing images)
+        const fileObjects = formData.images.filter(img => img instanceof File);
+        const existingUrls = formData.images.filter(img => typeof img === 'string' && img.trim() !== '');
+        
+        if (fileObjects.length > 0) {
+          const uploadedUrls = await uploadFilesToS3(fileObjects);
+          regularImageUrls = [...existingUrls, ...uploadedUrls];
+        } else {
+          regularImageUrls = existingUrls;
         }
       }
 
@@ -711,13 +1011,26 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
         processedUnitDetails = await Promise.all(unitDetailsUploadPromises);
       }
 
-      // Process connectivity points - extract text only
-      let processedConnectivityPoints = formData.connectivityPoints;
-      if (formType === 'builder' && formData.connectivityPoints && formData.connectivityPoints.length > 0) {
+      // Process connectivity points - extract text only (for both regular and builder properties)
+      // Schema expects array of strings, but form stores as array of objects with text property
+      let processedConnectivityPoints = [];
+      if (formData.connectivityPoints && formData.connectivityPoints.length > 0) {
         // Convert connectivity points to strings (text only, no images)
+        // Handle both object format { text: '...' } and string format
         processedConnectivityPoints = formData.connectivityPoints
-          .filter(point => point?.text?.trim() !== '')
-          .map(point => point.text.trim());
+          .map(point => {
+            // If it's already a string, use it directly
+            if (typeof point === 'string') {
+              return point.trim();
+            }
+            // If it's an object with text property, extract the text
+            if (point && typeof point === 'object' && point.text) {
+              return point.text.trim();
+            }
+            // If it's an object but no text property, try to stringify (fallback)
+            return null;
+          })
+          .filter(point => point && point !== ''); // Remove empty strings
       }
 
       // Filter out empty string values for non-required fields based on property type
@@ -728,21 +1041,25 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
         delete cleanedFormData.builder;
       }
 
+      // Build submit data, ensuring arrays are never undefined
       const submitData = {
         ...cleanedFormData,
         type: formType,
-        highlights: formData.highlights.filter(h => h?.trim() !== ''),
-        connectivityPoints: processedConnectivityPoints,
-        projectImages: projectImageUrls, // Replace file objects with S3 URLs
+        highlights: formData.highlights ? formData.highlights.filter(h => h?.trim() !== '') : [],
+        connectivityPoints: processedConnectivityPoints || [],
+        // Set images based on property type
+        ...(formType === 'builder' ? {
+          projectImages: projectImageUrls || [], // Replace file objects with S3 URLs
         // Replace single image file objects with S3 URLs for builder properties
-        ...(formType === 'builder' && {
-          projectLogo: projectLogoUrl,
-          wallpaperImage: wallpaperImageUrl,
-          descriptionImage: descriptionImageUrl,
-          highlightImage: highlightImageUrl,
-          floorPlan: floorPlanUrl,
-          masterPlan: masterPlanUrl,
-          unitDetails: processedUnitDetails, // Use processed unit details with uploaded floor plan URLs
+          projectLogo: projectLogoUrl || '',
+          wallpaperImage: wallpaperImageUrl || '',
+          descriptionImage: descriptionImageUrl || '',
+          highlightImage: highlightImageUrl || '',
+          floorPlan: floorPlanUrl || '',
+          masterPlan: masterPlanUrl || '',
+          unitDetails: processedUnitDetails || [], // Use processed unit details with uploaded floor plan URLs
+        } : {
+          images: regularImageUrls || [], // Regular property images
         }),
         // Include new fields
         amenities: formData.amenities || [],
@@ -753,15 +1070,114 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
         selectedConfigurations: formData.selectedConfigurations || []
       };
 
-      // If editing, preserve the ID
+      // Remove any undefined or null values and File objects that might cause validation issues
+      Object.keys(submitData).forEach(key => {
+        const value = submitData[key];
+        
+        // Remove File objects (they should have been converted to URLs already)
+        if (value instanceof File) {
+          console.warn(`File object found in ${key}, removing before API call`);
+          delete submitData[key];
+          return;
+        }
+        
+        // Handle arrays - ensure no File objects remain
+        if (Array.isArray(value)) {
+          const hasFiles = value.some(item => item instanceof File);
+          if (hasFiles) {
+            console.warn(`File objects found in ${key} array, filtering out`);
+            submitData[key] = value.filter(item => !(item instanceof File));
+          }
+        }
+        
+        if (value === undefined || value === null) {
+          // For arrays, set to empty array
+          if (key === 'images' || key === 'projectImages' || key === 'highlights' || 
+              key === 'amenities' || key === 'selectedConfigurations' || key === 'unitDetails') {
+            submitData[key] = [];
+          } else if (key === 'connectivityPoints') {
+            submitData[key] = [];
+          } else if (typeof value === 'object' && !Array.isArray(value)) {
+            // For objects, keep empty object or delete if not needed
+            if (key === 'constructionDetails') {
+              submitData[key] = { status: 'upcoming', reraDescription: '' };
+            } else {
+              delete submitData[key];
+            }
+          } else {
+            // For other values, delete if null/undefined
+            delete submitData[key];
+          }
+        }
+      });
+
+      // If editing, preserve the ID (parent will extract it for URL)
       if (isEditing && formData._id) {
         submitData._id = formData._id;
       }
 
-      // Final submit data prepared
-      onSave(submitData);
+      // Show saving progress
+      setUploadProgress({
+        visible: true,
+        status: 'saving',
+        message: isEditing ? 'Updating property...' : 'Saving property...',
+        files: [],
+        progress: 0
+      });
+
+      // Final submit data prepared - call onSave and handle success/error
+      try {
+        await onSave(submitData);
+        
+        // Show success
+        setUploadProgress({
+          visible: true,
+          status: 'success',
+          message: isEditing ? 'Property updated successfully!' : 'Property created successfully!',
+          files: [],
+          progress: 100
+        });
+        
+        // Wait a moment to show success message
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // Hide progress modal
+        setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+        
+        // Call success callback if provided
+        if (onSaveSuccess) {
+          onSaveSuccess();
+        }
+      } catch (saveError) {
+        // Hide upload progress
+        setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+        
+        // Show error popup (doesn't auto-hide) - hide technical details
+        setErrorPopup({
+          visible: true,
+          title: 'Save Error',
+          message: makeUserFriendlyError(saveError.message) || 'Failed to save property. Please try again.',
+          details: null // Don't show stack trace to users
+        });
+        
+        // Call error callback if provided
+        if (onSaveError) {
+          onSaveError(saveError);
+        }
+        throw saveError;
+      }
     } catch (error) {
-      // Error uploading images - handled by parent component
+      // Hide upload progress
+      setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+      
+      // Show error popup (doesn't auto-hide) - hide technical details
+      setErrorPopup({
+        visible: true,
+        title: 'Error',
+        message: makeUserFriendlyError(error.message) || 'Failed to save property. Please try again.',
+        details: null // Don't show stack trace to users
+      });
+      
       throw error;
     }
   };
@@ -769,9 +1185,18 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
   return (
     <>
       <UploadProgress 
-        isVisible={uploadProgress.isVisible}
-        progress={uploadProgress.progress}
+        isVisible={uploadProgress.visible}
+        status={uploadProgress.status}
         message={uploadProgress.message}
+        files={uploadProgress.files}
+        progress={uploadProgress.progress}
+      />
+      <ErrorPopup
+        isVisible={errorPopup.visible}
+        title={errorPopup.title}
+        message={errorPopup.message}
+        details={errorPopup.details}
+        onClose={() => setErrorPopup({ visible: false, title: 'Error', message: '', details: null })}
       />
       <form onSubmit={handleSubmit}>
       {/* Property Type Selection */}
@@ -894,7 +1319,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
               <input 
                 type="text" 
                 name="location" 
-                value={formData.location} 
+                value={formData.location || ''} 
                 onChange={handleChange}
                 className={`form-control ${errors.location ? 'is-invalid' : ''}`}
                 placeholder="Enter nearby location or area (e.g., Near Metro Station, Close to Mall)"
@@ -911,7 +1336,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
               <input 
                 type="text" 
                 name="title" 
-                value={formData.title} 
+                value={formData.title || ''} 
                 onChange={handleChange} 
                 className={`form-control ${errors.title ? 'is-invalid' : ''}`}
                 placeholder="Enter property name"
@@ -924,7 +1349,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
               <input 
                 type="number" 
                 name="price" 
-                value={formData.price} 
+                value={formData.price || ''} 
                 onChange={handleChange}
                 className={`form-control ${errors.price ? 'is-invalid' : ''}`}
                 placeholder="Enter property price"
@@ -940,7 +1365,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
               <label className="form-label fw-semibold">Project Description *</label>
               <textarea 
                 name="description" 
-                value={formData.description} 
+                value={formData.description || ''} 
                 onChange={handleChange}
                 className={`form-control ${errors.description ? 'is-invalid' : ''}`}
                 rows="3" 
@@ -951,19 +1376,19 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
             </div>
             </div>
 
-          {/* Row 6: Project Images */}
+          {/* Row 6: Property Images */}
           <div className="row mb-4">
             <div className="col-12">
               <MultipleFilePreview 
-                label="Project Images"
-                value={formData.projectImages}
-                onChange={(files) => setFormData({...formData, projectImages: files})}
+                label="Property Images"
+                value={formData.images}
+                onChange={(files) => setFormData({...formData, images: files})}
                 accept="image/*"
                 minFiles={2}
                 maxFiles={5}
                 disabled={isLoading}
               />
-              {errors.projectImages && <div className="text-danger small mt-1">{errors.projectImages}</div>}
+              {errors.images && <div className="text-danger small mt-1">{errors.images}</div>}
             </div>
           </div>
 
@@ -1096,7 +1521,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
           <input 
             type="text" 
                 name="projectName" 
-                value={formData.projectName} 
+                value={formData.projectName || ''} 
                 onChange={handleChange}
                 className={`form-control ${errors.projectName ? 'is-invalid' : ''}`}
                 placeholder="Enter project name"
@@ -1172,7 +1597,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
               <label className="form-label fw-semibold">Full Address *</label>
               <textarea 
                 name="fullAddress" 
-                value={formData.fullAddress} 
+                value={formData.fullAddress || ''} 
                 onChange={handleChange}
                 className={`form-control ${errors.fullAddress ? 'is-invalid' : ''}`}
                 rows="2" 
@@ -1186,7 +1611,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
               <input 
                 type="url" 
                 name="googleMapUrl" 
-                value={formData.googleMapUrl} 
+                value={formData.googleMapUrl || ''} 
                 onChange={handleChange}
                 className="form-control"
                 placeholder="Paste Google Maps link"
@@ -1212,7 +1637,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
                   <input 
                     type="text" 
                     name="about" 
-                    value={formData.about} 
+                    value={formData.about || ''} 
                     onChange={handleChange}
                     className={`form-control ${errors.about ? 'is-invalid' : ''}`}
                     placeholder="e.g. 816 Units, 2 Towers, 15 Floors"
@@ -1225,7 +1650,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
                   <input 
                     type="text" 
                     name="landArea" 
-                    value={formData.landArea} 
+                    value={formData.landArea || ''} 
                     onChange={handleChange}
                     className={`form-control ${errors.landArea ? 'is-invalid' : ''}`}
                     placeholder="e.g. 20 Acres"
@@ -1242,7 +1667,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
                   <input 
                     type="number" 
                     name="price" 
-                    value={formData.price} 
+                    value={formData.price || ''} 
                     onChange={handleChange}
                     className={`form-control ${errors.price ? 'is-invalid' : ''}`}
                     placeholder="e.g. 15000000"
@@ -1255,7 +1680,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
                   <input 
                     type="month" 
                     name="possessionDate" 
-                    value={formData.possessionDate} 
+                    value={formData.possessionDate || ''} 
                     onChange={handleChange}
                     className={`form-control ${errors.possessionDate ? 'is-invalid' : ''}`}
                     disabled={isLoading}
@@ -1285,7 +1710,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
                   <input 
                     type="text" 
                     name="reraNo" 
-                    value={formData.reraNo} 
+                    value={formData.reraNo || ''} 
                     onChange={handleChange}
                     className={`form-control ${errors.reraNo ? 'is-invalid' : ''}`}
                     placeholder="e.g. HARERA Registration No. 21"
@@ -1316,7 +1741,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
                   <label className="form-label fw-semibold">Project Description *</label>
                   <textarea 
                     name="description" 
-                    value={formData.description} 
+                    value={formData.description || ''} 
                     onChange={handleChange}
                     className={`form-control ${errors.description ? 'is-invalid' : ''}`}
                     rows="3" 

@@ -7,7 +7,7 @@ import { convertToCloudFrontUrl } from '../utils/cloudfront.js';
 import { authenticateJWT } from '../middleware/jwtAuth.js';
 import { requireAdminOrSubAdmin } from '../middleware/roleAuth.js';
 import { logActivity } from '../middleware/activityLogger.js';
-import { sanitizeObject, sanitizeString } from '../utils/sanitize.js';
+import { sanitizeObject, sanitizeString, escapeRegex } from '../utils/sanitize.js';
 import { handleRouteError } from '../utils/errorHandler.js';
 
 const router = express.Router();
@@ -99,9 +99,11 @@ router.get('/', async (req, res) => {
     
     // Handle name filter - search in both title (regular) and projectName (builder)
     if (name) {
+      // Escape regex special characters to prevent ReDoS and injection attacks
+      const escapedName = escapeRegex(name);
       filter.$or = [
-        { title: new RegExp(name, 'i') },
-        { projectName: new RegExp(name, 'i') }
+        { title: new RegExp(escapedName, 'i') },
+        { projectName: new RegExp(escapedName, 'i') }
       ];
     }
     

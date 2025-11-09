@@ -6,6 +6,7 @@ import ImageUpload from "@/components/imageUpload";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Image from "next/image";
 import logo from "../../public/img/logo.jpg";
+import UploadProgress from "@/components/UploadProgress";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
 
@@ -29,9 +30,18 @@ export default function City() {
     localities: [],
   });
   
+  const [backgroundImageFile, setBackgroundImageFile] = useState(null);
   const [originalFormCity, setOriginalFormCity] = useState(null);
   const [formErrors, setFormErrors] = useState({});
   const [notification, setNotification] = useState({ show: false, message: '', type: 'success' });
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({
+    visible: false,
+    status: 'uploading',
+    message: '',
+    files: [],
+    progress: 0
+  });
 
   const showNotification = (message, type = 'success') => {
     setNotification({ show: true, message, type });
@@ -158,7 +168,8 @@ export default function City() {
       errors.country = 'Country is required';
     }
     
-    if (!formCity.backgroundImage || formCity.backgroundImage.trim() === '') {
+    // Check if background image exists (either existing URL or new file)
+    if ((!formCity.backgroundImage || formCity.backgroundImage.trim() === '') && !backgroundImageFile) {
       errors.backgroundImage = 'Background image is required';
     }
     
@@ -177,6 +188,90 @@ export default function City() {
     }
     
     try {
+      setIsUploading(true);
+      
+      // Upload background image first if a new file is selected
+      let backgroundImageUrl = formCity.backgroundImage;
+      
+      if (backgroundImageFile) {
+        // Show upload progress
+        setUploadProgress({
+          visible: true,
+          status: 'uploading',
+          message: 'Uploading background image...',
+          files: [{ name: backgroundImageFile.name, status: 'uploading' }],
+          progress: 0
+        });
+
+        // Simulate progress
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+          progress += 15;
+          if (progress < 90) {
+            setUploadProgress(prev => ({ ...prev, progress }));
+          }
+        }, 200);
+
+        try {
+          // Upload the new file to S3
+          const uploadFormData = new FormData();
+          uploadFormData.append('image', backgroundImageFile);
+          
+          const token = localStorage.getItem('token');
+          const uploadResponse = await fetch(`${API_BASE_URL}/api/upload/single`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`
+            },
+            body: uploadFormData,
+          });
+          
+          clearInterval(progressInterval);
+          
+          if (!uploadResponse.ok) {
+            setUploadProgress({
+              visible: true,
+              status: 'error',
+              message: 'Failed to upload background image',
+              files: [{ name: backgroundImageFile.name, status: 'error' }],
+              progress: 0
+            });
+            setTimeout(() => {
+              setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+            }, 3000);
+            throw new Error('Failed to upload background image');
+          }
+          
+          const uploadData = await uploadResponse.json();
+          backgroundImageUrl = uploadData.imageUrl;
+          
+          // Update progress to show completion
+          setUploadProgress({
+            visible: true,
+            status: 'uploading',
+            message: 'Image uploaded successfully!',
+            files: [{ name: backgroundImageFile.name, status: 'completed' }],
+            progress: 100
+          });
+          
+          // Wait a moment before showing "saving" status
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (uploadError) {
+          clearInterval(progressInterval);
+          throw uploadError;
+        }
+      }
+
+      // Show saving progress
+      setUploadProgress({
+        visible: true,
+        status: 'saving',
+        message: 'Saving city data...',
+        files: [],
+        progress: 0
+      });
+      
+      // Now create form data for city save
       const formData = new FormData();
       formData.append('name', formCity.name);
       formData.append('state', formCity.state);
@@ -184,20 +279,9 @@ export default function City() {
       formData.append('isActive', formCity.isActive);
       formData.append('localities', JSON.stringify(formCity.localities));
       
-      // Handle background image - if it's a URL, we need to convert it to a file
-      if (formCity.backgroundImage) {
-        if (formCity.backgroundImage.startsWith('http')) {
-          // It's already an S3 URL, just add it as a string
-          formData.append('backgroundImageUrl', formCity.backgroundImage);
-        } else if (formCity.backgroundImage.startsWith('data:')) {
-          // It's a data URL, convert to file
-          const response = await fetch(formCity.backgroundImage);
-          const blob = await response.blob();
-          formData.append('backgroundImage', blob, 'image.jpg');
-        } else if (formCity.backgroundImage instanceof File) {
-          // It's a file object
-          formData.append('backgroundImage', formCity.backgroundImage);
-        }
+      // Add background image URL (either existing or newly uploaded)
+      if (backgroundImageUrl) {
+        formData.append('backgroundImageUrl', backgroundImageUrl);
       }
 
       const url = formCity._id ? `${API_BASE_URL}/api/cities/${formCity._id}` : `${API_BASE_URL}/api/cities`;
@@ -213,10 +297,26 @@ export default function City() {
       });
 
       if (response.ok) {
+        // Show success
+        setUploadProgress({
+          visible: true,
+          status: 'success',
+          message: 'City saved successfully!',
+          files: [],
+          progress: 100
+        });
+
+        // Wait a moment to show success message
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        // Hide progress modal
+        setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+
         await fetchCities(); // Refresh the list
         setShowCityForm(false);
         setFormErrors({});
         setOriginalFormCity(null);
+        setBackgroundImageFile(null); // Clear file after successful save
         showNotification('City saved successfully!', 'success');
         setFormCity({
           _id: null,
@@ -229,11 +329,32 @@ export default function City() {
         });
       } else {
         const errorData = await response.json();
-        const errorMessage = errorData.error || 'Failed to save city';
-        showNotification(errorMessage, 'danger');
+        setUploadProgress({
+          visible: true,
+          status: 'error',
+          message: errorData.error || 'Failed to save city',
+          files: [],
+          progress: 0
+        });
+        setTimeout(() => {
+          setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+        }, 3000);
+        showNotification(errorData.error || 'Failed to save city', 'danger');
       }
     } catch (error) {
-      showNotification('Failed to save city. Please try again.', 'danger');
+      setUploadProgress({
+        visible: true,
+        status: 'error',
+        message: error.message || 'Failed to save city. Please try again.',
+        files: [],
+        progress: 0
+      });
+      setTimeout(() => {
+        setUploadProgress({ visible: false, status: 'uploading', message: '', files: [], progress: 0 });
+      }, 3000);
+      showNotification(`Failed to save city: ${error.message}`, 'danger');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -472,8 +593,15 @@ export default function City() {
               <ImageUpload
                 label=""
                 value={formCity.backgroundImage}
-                onChange={(url) => {
-                  setFormCity({ ...formCity, backgroundImage: url });
+                onChange={(file) => {
+                  // If it's a File object, store it separately
+                  if (file instanceof File) {
+                    setBackgroundImageFile(file);
+                  } else {
+                    // If it's null (removed), clear both
+                    setBackgroundImageFile(null);
+                    setFormCity({ ...formCity, backgroundImage: "" });
+                  }
                   if (formErrors.backgroundImage) {
                     setFormErrors({ ...formErrors, backgroundImage: '' });
                   }
@@ -490,9 +618,9 @@ export default function City() {
               <button 
                 className="btn btn-success me-2" 
                 type="submit"
-                disabled={formCity._id && !hasCityFormChanges()}
+                disabled={(formCity._id && !hasCityFormChanges()) || isUploading}
               >
-                {formCity._id ? 'Update' : 'Save'}
+                {isUploading ? 'Saving...' : (formCity._id ? 'Update' : 'Save')}
               </button>
               <button
                 className="btn btn-secondary"
@@ -708,6 +836,13 @@ export default function City() {
           </div>
         )}
       </div>
+      <UploadProgress
+        isVisible={uploadProgress.visible}
+        status={uploadProgress.status}
+        message={uploadProgress.message}
+        files={uploadProgress.files}
+        progress={uploadProgress.progress}
+      />
     </ProtectedRoute>
   );
 }

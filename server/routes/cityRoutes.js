@@ -8,7 +8,8 @@ import { authenticateJWT } from "../middleware/jwtAuth.js";
 import { requireAdminOrSubAdmin } from "../middleware/roleAuth.js";
 import { logActivity } from "../middleware/activityLogger.js";
 import { sanitizeObject, sanitizeString } from "../utils/sanitize.js";
-import { handleRouteError } from "../utils/errorHandler.js";
+import { handleRouteError, getErrorMessage } from "../utils/errorHandler.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -29,7 +30,8 @@ router.get("/", async (req, res) => {
     
     res.json(citiesWithCloudFrontUrls);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    logger.error("Error fetching city:", { error: error.message });
+    res.status(500).json({ error: getErrorMessage(error, 'Failed to fetch city') });
   }
 });
 
@@ -63,8 +65,8 @@ router.get("/stats", async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("Error fetching city stats:", error);
-    res.status(500).json({ error: error.message });
+    logger.error("Error fetching city stats:", { error: error.message });
+    res.status(500).json({ error: getErrorMessage(error, 'Failed to fetch city statistics') });
   }
 });
 
@@ -84,7 +86,8 @@ router.get("/:id", async (req, res) => {
     
     res.json(cityWithCloudFrontUrl);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    logger.error("Error fetching city:", { error: error.message });
+    res.status(500).json({ error: getErrorMessage(error, 'Failed to fetch city') });
   }
 });
 
@@ -327,7 +330,8 @@ router.delete("/:cityId/localities/:localityId", async (req, res) => {
     await city.save();
     res.json(city);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    logger.error("Error fetching city:", { error: error.message });
+    res.status(500).json({ error: getErrorMessage(error, 'Failed to fetch city') });
   }
 });
 

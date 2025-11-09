@@ -278,11 +278,15 @@ router.post('/send-otp', async (req, res) => {
 });
 
 // Verify OTP endpoint
-router.post('/verify-otp', logActivity, async (req, res) => {
+router.post('/verify-otp', async (req, res) => {
   try {
     const { sessionId, otp } = req.body;
 
     if (!sessionId || !otp) {
+      logger.warn('OTP verification failed: Missing sessionId or OTP', { 
+        hasSessionId: !!sessionId, 
+        hasOtp: !!otp 
+      });
       return res.status(400).json({ 
         success: false, 
         error: 'Session ID and OTP are required' 
@@ -292,6 +296,10 @@ router.post('/verify-otp', logActivity, async (req, res) => {
     // Enhanced OTP validation
     const otpRegex = /^\d{4,8}$/;
     if (!otpRegex.test(otp)) {
+      logger.warn('OTP verification failed: Invalid OTP format', { 
+        otpLength: otp?.length,
+        sessionId 
+      });
       return res.status(400).json({ 
         success: false, 
         error: 'Invalid OTP format. OTP must be 4-8 digits' 
@@ -301,6 +309,10 @@ router.post('/verify-otp', logActivity, async (req, res) => {
     // Check if session exists
     const session = otpSessions.get(sessionId);
     if (!session) {
+      logger.warn('OTP verification failed: Invalid or expired session', { 
+        sessionId,
+        availableSessions: otpSessions.size 
+      });
       return res.status(400).json({ 
         success: false, 
         error: 'Invalid or expired session' 
@@ -309,6 +321,11 @@ router.post('/verify-otp', logActivity, async (req, res) => {
 
     // Check if OTP has expired (120 seconds)
     if (session.expiresAt && new Date() > session.expiresAt) {
+      logger.warn('OTP verification failed: OTP expired', { 
+        sessionId,
+        expiresAt: session.expiresAt,
+        now: new Date()
+      });
       otpSessions.delete(sessionId);
       return res.status(400).json({ 
         success: false, 
@@ -319,6 +336,10 @@ router.post('/verify-otp', logActivity, async (req, res) => {
 
     // Check attempt limit (max 3 attempts)
     if (session.attempts >= 3) {
+      logger.warn('OTP verification failed: Too many attempts', { 
+        sessionId,
+        attempts: session.attempts 
+      });
       otpSessions.delete(sessionId);
       return res.status(400).json({ 
         success: false, 
@@ -330,6 +351,7 @@ router.post('/verify-otp', logActivity, async (req, res) => {
     session.attempts++;
 
     // Verify OTP using 2Factor service
+    logger.info(`Verifying OTP for session: ${sessionId}, phone: ${session.phoneNumber}, attempt: ${session.attempts}`);
     const result = await twoFactorService.verifyOTP(sessionId, otp);
 
     if (result.success) {
@@ -358,16 +380,52 @@ router.post('/verify-otp', logActivity, async (req, res) => {
 
         // Find existing admin user in database - only allow existing admin users
         logger.info(`Looking for admin user with phone: ${session.phoneNumber}`);
+        
+        // Try multiple phone number formats to find the user
         let user = await Admin.findOne({ phoneNumber: session.phoneNumber });
-        logger.info(`Admin user found: ${user ? 'Yes' : 'No'}`);
+        
+        // If not found, try without + prefix
+        if (!user && session.phoneNumber.startsWith('+')) {
+          const phoneWithoutPlus = session.phoneNumber.substring(1);
+          logger.info(`Trying phone number without + prefix: ${phoneWithoutPlus}`);
+          user = await Admin.findOne({ phoneNumber: phoneWithoutPlus });
+        }
+        
+        // If still not found, try with different formats
+        if (!user) {
+          const phoneDigits = session.phoneNumber.replace(/\D/g, '');
+          // Try with +91 prefix
+          if (phoneDigits.length === 12 && phoneDigits.startsWith('91')) {
+            const phoneWithPlus = `+${phoneDigits}`;
+            logger.info(`Trying phone number with +91 prefix: ${phoneWithPlus}`);
+            user = await Admin.findOne({ phoneNumber: phoneWithPlus });
+          }
+          // Try with just 10 digits (last 10 digits)
+          if (!user && phoneDigits.length >= 10) {
+            const last10Digits = phoneDigits.slice(-10);
+            const phoneWithCountryCode = `+91${last10Digits}`;
+            logger.info(`Trying phone number with last 10 digits: ${phoneWithCountryCode}`);
+            user = await Admin.findOne({ phoneNumber: phoneWithCountryCode });
+          }
+        }
+        
+        logger.info(`Admin user found: ${user ? 'Yes' : 'No'}`, { 
+          searchedPhone: session.phoneNumber,
+          userId: user?._id,
+          userName: user?.name 
+        });
         
         if (!user) {
           // User not found in database - unauthorized access
-          logger.warn(`Unauthorized login attempt from unknown phone: ${session.phoneNumber}`);
+          logger.error(`Unauthorized login attempt from unknown phone: ${session.phoneNumber}`, {
+            sessionId,
+            phoneNumber: session.phoneNumber,
+            totalAdmins: await Admin.countDocuments()
+          });
           otpSessions.delete(sessionId);
           return res.status(401).json({ 
             success: false, 
-            error: 'Unauthorized access. Your phone number is not registered in our system.',
+            error: 'Unauthorized access. Your phone number is not registered in our system. Please contact administrator or run the seedadmin script to create admin users.',
             code: 'UNAUTHORIZED_USER'
           });
         }
@@ -387,25 +445,32 @@ router.post('/verify-otp', logActivity, async (req, res) => {
         logger.info(`Updating last login for existing user: ${session.phoneNumber}`);
         user.lastLogin = new Date();
         user.lastActivity = new Date();
+        user.loginCount = (user.loginCount || 0) + 1;
+        
+        try {
         await user.save();
         logger.info(`User login updated successfully: ${session.phoneNumber}`);
+        } catch (saveError) {
+          logger.error('Error saving user login data:', {
+            error: saveError.message,
+            userId: user._id,
+            phoneNumber: user.phoneNumber,
+            errorType: saveError.name,
+            validationErrors: saveError.errors
+          });
         
-        // Set activity data for logging - will be logged by logActivity middleware
-        req.activityData = {
-          action: 'login',
-          resource: 'Authentication',
-          resourceId: user._id,
-          details: `User logged in successfully via ${session.otpType || 'SMS'} OTP`,
-          severity: 'low'
-        };
-        
-        // Set user data for activity logging middleware
-        req.user = {
-          id: user._id,
-          phoneNumber: user.phoneNumber,
-          name: user.name,
-          role: user.role
-        };
+          // If it's a validation error, return 400
+          if (saveError.name === 'ValidationError') {
+            const validationErrors = Object.values(saveError.errors).map(err => err.message).join(', ');
+            return res.status(400).json({ 
+              success: false, 
+              error: `Validation failed: ${validationErrors}` 
+            });
+          }
+          
+          // For other errors, log but continue (don't block login)
+          logger.warn('Continuing login despite save error');
+        }
         
         // Also log successful OTP verification separately
         try {
@@ -460,6 +525,28 @@ router.post('/verify-otp', logActivity, async (req, res) => {
 
         logger.info(`OTP verified successfully for ${session.phoneNumber}`);
 
+        // Log successful login activity
+        try {
+          await ActivityLog.logActivity({
+            userId: user._id,
+            userPhone: user.phoneNumber,
+            userName: user.name || 'Unknown',
+            userRole: user.role || 'user',
+            action: 'login',
+            resource: 'Authentication',
+            resourceId: user._id,
+            details: `User logged in successfully via ${session.otpType || 'SMS'} OTP`,
+            ipAddress: req.ip || req.connection.remoteAddress || 'unknown',
+            userAgent: req.get('User-Agent') || 'unknown',
+            severity: 'low',
+            status: 'success',
+            metadata: { sessionId, otpType: session.otpType || 'sms', attempts: session.attempts }
+          });
+        } catch (logError) {
+          logger.error('Failed to log login activity:', logError);
+          // Don't fail the login if logging fails
+        }
+
         res.json({ 
           success: true, 
           message: 'OTP verified successfully. User logged in.',
@@ -480,8 +567,10 @@ router.post('/verify-otp', logActivity, async (req, res) => {
         logger.error('Database error during OTP verification:', {
           error: dbError.message,
           stack: dbError.stack,
-          phoneNumber: session.phoneNumber,
-          errorType: dbError.name
+          phoneNumber: session?.phoneNumber,
+          errorType: dbError.name,
+          errorCode: dbError.code,
+          mongooseState: mongoose.connection.readyState
         });
         
         // Handle specific database errors
@@ -490,15 +579,17 @@ router.post('/verify-otp', logActivity, async (req, res) => {
           logger.error(`User validation failed: ${validationErrors}`);
           return res.status(400).json({ 
             success: false, 
-            error: `Validation failed: ${validationErrors}` 
+            error: `Validation failed: ${validationErrors}`,
+            code: 'VALIDATION_ERROR'
           });
         }
         
         if (dbError.code === 11000) {
-          logger.error(`Duplicate phone number: ${session.phoneNumber}`);
+          logger.error(`Duplicate phone number: ${session?.phoneNumber}`);
           return res.status(409).json({ 
             success: false, 
-            error: 'Phone number already exists. Please try logging in instead.' 
+            error: 'Phone number already exists. Please try logging in instead.',
+            code: 'DUPLICATE_PHONE'
           });
         }
         
@@ -506,13 +597,25 @@ router.post('/verify-otp', logActivity, async (req, res) => {
           logger.error('Database connection error:', dbError.message);
           return res.status(503).json({ 
             success: false, 
-            error: 'Database temporarily unavailable. Please try again later.' 
+            error: 'Database temporarily unavailable. Please try again later.',
+            code: 'DATABASE_UNAVAILABLE'
+          });
+        }
+        
+        // Check if database is disconnected
+        if (mongoose.connection.readyState !== 1) {
+          logger.error('Database disconnected during OTP verification');
+          return res.status(503).json({ 
+            success: false, 
+            error: 'Database connection lost. Please try again later.',
+            code: 'DATABASE_DISCONNECTED'
           });
         }
         
         res.status(500).json({ 
           success: false, 
-          error: `Database error: ${dbError.message}` 
+          error: `Database error: ${dbError.message}`,
+          code: 'DATABASE_ERROR'
         });
       }
     } else {

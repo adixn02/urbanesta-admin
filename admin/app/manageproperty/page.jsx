@@ -154,11 +154,17 @@ export default function ManageProperty() {
   const saveProperty = async (propertyData) => {
     try {
       setIsSaving(true);
-      const url = propertyData._id 
-        ? `${API_BASE_URL}/api/properties/${propertyData._id}`
+      
+      // Extract _id before sending (it goes in URL, not body)
+      const propertyId = propertyData._id;
+      const url = propertyId 
+        ? `${API_BASE_URL}/api/properties/${propertyId}`
         : `${API_BASE_URL}/api/properties`;
       
-      const method = propertyData._id ? 'PUT' : 'POST';
+      const method = propertyId ? 'PUT' : 'POST';
+      
+      // Remove _id from body (it's only used in URL for updates)
+      const { _id, ...bodyData } = propertyData;
       
       const token = localStorage.getItem('token');
       const response = await fetch(url, {
@@ -167,7 +173,7 @@ export default function ManageProperty() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(propertyData),
+        body: JSON.stringify(bodyData),
       });
       
       // Check for 401/403 errors before parsing JSON
@@ -282,7 +288,12 @@ export default function ManageProperty() {
       return;
     }
 
-    await saveProperty(property);
+    try {
+      await saveProperty(property);
+    } catch (error) {
+      // Re-throw error so AddPropertyForm can handle it and show in UploadProgress
+      throw error;
+    }
   };
 
   const openModal = (type = 'regular', property = null) => {

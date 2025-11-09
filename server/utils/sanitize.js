@@ -169,3 +169,16 @@ export function sanitizeObjectId(id) {
   return null;
 }
 
+/**
+ * Escape special regex characters to prevent ReDoS and injection attacks
+ * @param {string} str - String to escape
+ * @returns {string} - Escaped string safe for use in RegExp
+ */
+export function escapeRegex(str) {
+  if (typeof str !== 'string') {
+    return str;
+  }
+  // Escape all special regex characters
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
