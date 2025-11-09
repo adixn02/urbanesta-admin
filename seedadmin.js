@@ -1,16 +1,3 @@
-/**
- * Admin Seeding Script
- * 
- * IMPORTANT: This script must be run from the server directory because dependencies
- * are installed there. Use one of these methods:
- * 
- * Method 1 (Recommended): Run from server directory
- *   cd server && node ../seedadmin.js
- * 
- * Method 2: Use npm script
- *   cd server && npm run seed:admin
- */
-
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -69,7 +56,7 @@ const adminData = [
   {
     _id: new mongoose.Types.ObjectId("68f4f92df0dc6b02e508c79e"),
     name: "Sub Admin",
-    phoneNumber: "+918198982098",
+    phoneNumber: "+919812171400",
     email: "subadmin@urbanesta.com",
     role: "subadmin",
     isActive: true,
