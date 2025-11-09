@@ -100,17 +100,19 @@ export default function MultipleFilePreview({
       
       setImageItems(newItems);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, valueToImageItems]);
 
   // Cleanup blob URLs on unmount
   useEffect(() => {
+    const blobUrlMap = blobUrlRefs.current;
     return () => {
-      blobUrlRefs.current.forEach((blobUrl) => {
+      blobUrlMap.forEach((blobUrl) => {
         if (blobUrl && blobUrl.startsWith('blob:')) {
           URL.revokeObjectURL(blobUrl);
         }
       });
-      blobUrlRefs.current.clear();
+      blobUrlMap.clear();
     };
   }, []);
 

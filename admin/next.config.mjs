@@ -4,8 +4,15 @@ const nextConfig = {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002',
   },
   eslint: {
-    // Don't fail build on ESLint warnings during production builds
-    ignoreDuringBuilds: false, // Keep false to catch errors, but warnings won't block
+    // Warning: This allows production builds to successfully complete even if
+    // your project has ESLint errors or warnings.
+    ignoreDuringBuilds: false, // Keep false to catch errors
+  },
+  typescript: {
+    // !! WARN !!
+    // Dangerously allow production builds to successfully complete even if
+    // your project has type errors.
+    ignoreBuildErrors: false,
   },
   images: {
     remotePatterns: [

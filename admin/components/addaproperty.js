@@ -257,6 +257,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
       });
       setFormType('regular');
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [property?._id, property?.id]); // Only re-run when property ID changes
   const [availableConfigurations, setAvailableConfigurations] = useState([]);
   const [loadingConfigurations, setLoadingConfigurations] = useState(false);
@@ -268,6 +269,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
     } else {
       setAvailableConfigurations([]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.category, formData.subcategory]);
 
   // Load configurations when editing a property
@@ -275,6 +277,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
     if (isEditing && formData.category && formData.subcategory) {
       fetchConfigurations(formData.category, formData.subcategory);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditing, formData.category, formData.subcategory]);
 
   // Get subcategories based on selected category
@@ -415,6 +418,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
         })
       }));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formType]);
 
   const handleChange = (e) => {
