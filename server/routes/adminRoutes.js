@@ -5,6 +5,7 @@ import { authenticateJWT } from '../middleware/jwtAuth.js';
 import { requireAdmin, requireRole } from '../middleware/roleAuth.js';
 import { escapeRegex } from '../utils/sanitize.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -97,7 +98,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching admin stats:', error);
+    logger.error('Error fetching admin stats:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch admin statistics'
@@ -243,7 +244,7 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
       message: 'User updated successfully'
     });
   } catch (error) {
-    console.error('Error updating admin user:', error);
+    logger.error('Error updating admin user:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to update admin user'
@@ -288,7 +289,7 @@ router.delete('/users/:id', requireAdmin, logActivity, async (req, res) => {
       message: 'User deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting admin user:', error);
+    logger.error('Error deleting admin user:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to delete admin user'
@@ -337,7 +338,7 @@ router.get('/logs', requireAdmin, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching activity logs:', error);
+    logger.error('Error fetching activity logs:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch activity logs'
@@ -360,7 +361,7 @@ router.get('/logs/summary', requireAdmin, async (req, res) => {
       data: summary
     });
   } catch (error) {
-    console.error('Error fetching activity summary:', error);
+    logger.error('Error fetching activity summary:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch activity summary'
@@ -403,7 +404,7 @@ router.post('/send-otp-for-user', requireAdmin, async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error sending OTP for user creation:', error);
+    logger.error('Error sending OTP for user creation:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to send OTP'
@@ -450,7 +451,7 @@ router.post('/verify-otp-for-user', requireAdmin, async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error verifying OTP for user creation:', error);
+    logger.error('Error verifying OTP for user creation:', { error: error.message });
     res.status(500).json({
       success: false,
       error: 'Failed to verify OTP'
