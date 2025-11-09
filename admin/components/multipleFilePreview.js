@@ -102,7 +102,7 @@ export default function MultipleFilePreview({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, valueToImageItems]);
-
+    
   // Cleanup blob URLs on unmount
   useEffect(() => {
     const blobUrlMap = blobUrlRefs.current;
@@ -163,7 +163,7 @@ export default function MultipleFilePreview({
       return {
         id,
         type: 'file',
-        file,
+      file,
         preview: blobUrl,
         loading: false,
         error: null
@@ -188,7 +188,7 @@ export default function MultipleFilePreview({
         URL.revokeObjectURL(blobUrl);
       }
       blobUrlRefs.current.delete(idToRemove);
-    }
+      }
 
     const updatedItems = imageItems.filter(item => item.id !== idToRemove);
     setImageItems(updatedItems);
@@ -266,24 +266,24 @@ export default function MultipleFilePreview({
                   <div className="d-flex flex-column align-items-center justify-content-center" style={{ height: '120px' }}>
                     <i className="bi bi-exclamation-triangle text-danger" style={{ fontSize: '2rem' }}></i>
                     <small className="text-danger mt-2 text-center">{item.error}</small>
-                    <button
-                      type="button"
+                <button
+                  type="button"
                       onClick={() => removeImage(item.id)}
                       className="btn btn-sm btn-danger mt-2"
                     >
                       <i className="bi bi-trash me-1"></i>
                       Remove
-                    </button>
-                  </div>
+                </button>
+                </div>
                 ) : item.preview ? (
                   <>
-                    <img
+                <img
                       src={item.preview}
                       alt={`Image ${index + 1}`}
-                      className="img-thumbnail w-100"
-                      style={{ 
-                        height: "120px", 
-                        objectFit: "cover",
+                  className="img-thumbnail w-100"
+                  style={{ 
+                    height: "120px", 
+                    objectFit: "cover",
                         aspectRatio: "1/1",
                         cursor: "pointer",
                         display: "block"
@@ -299,29 +299,29 @@ export default function MultipleFilePreview({
                         </div>
                       </div>
                     )}
-                    <button
-                      type="button"
+                <button
+                  type="button"
                       onClick={() => removeImage(item.id)}
-                      className="btn btn-sm btn-danger position-absolute"
-                      style={{ 
-                        top: "5px", 
-                        right: "5px",
+                  className="btn btn-sm btn-danger position-absolute"
+                  style={{ 
+                    top: "5px", 
+                    right: "5px",
                         width: "28px",
                         height: "28px",
-                        padding: "0",
-                        borderRadius: "50%",
+                    padding: "0",
+                    borderRadius: "50%",
                         fontSize: "14px",
                         lineHeight: "1",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center"
-                      }}
-                      disabled={disabled}
-                      title="Remove image"
-                    >
-                      ×
-                    </button>
-                    <div className="position-absolute bottom-0 start-0 end-0 bg-dark bg-opacity-75 text-white text-center small py-1">
+                  }}
+                  disabled={disabled}
+                  title="Remove image"
+                >
+                  ×
+                </button>
+                <div className="position-absolute bottom-0 start-0 end-0 bg-dark bg-opacity-75 text-white text-center small py-1">
                       {index + 1} / {totalImages}
                       {item.type === 'file' && (
                         <span className="ms-2 badge bg-info">New</span>
@@ -339,7 +339,7 @@ export default function MultipleFilePreview({
                       <span className="visually-hidden">Loading...</span>
                     </div>
                     <small className="text-muted mt-2">Loading preview...</small>
-                  </div>
+                </div>
                 )}
               </div>
             </div>
