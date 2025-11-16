@@ -21,8 +21,7 @@ const nextConfig = {
   // React strict mode for catching issues
   reactStrictMode: true,
 
-  // Optimize production build
-  swcMinify: true, // Use SWC for faster minification
+  // Note: swcMinify is enabled by default in Next.js 15, no need to specify
 
   // Image optimization
   images: {
@@ -101,7 +100,7 @@ const nextConfig = {
 
   // Experimental features for better performance
   experimental: {
-    optimizeCss: true,
+    // optimizeCss: true, // Disabled - requires 'critters' package. Install with: npm install critters
     optimizePackageImports: ['bootstrap', 'bootstrap-icons'],
   },
 
