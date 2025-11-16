@@ -94,15 +94,58 @@ export async function apiFetch(path, options = {}, cacheOptions = {}) {
       // Remove disableAutoRedirect from options before passing to fetch (it's not a valid fetch option)
       const { disableAutoRedirect: _, ...fetchOptions } = options;
       
+      console.log('🌐 Making API request:', {
+        url,
+        method,
+        hasToken: !!freshToken,
+        tokenPreview: freshToken ? freshToken.substring(0, 20) + '...' : 'none',
+        headers: Object.keys(headers)
+      });
+      
       const response = await fetch(url, {
         credentials: 'include',
         headers,
         ...fetchOptions,
       });
+      
+      console.log('📡 API response:', {
+        url,
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok
+      });
 
       // Handle authentication errors (401 Unauthorized, 403 Forbidden)
       if (response.status === 401 || response.status === 403) {
-        console.log('🔴 Authentication failed - Token expired or invalid');
+        // Try to get error details from response
+        let errorDetails = 'Token expired or invalid';
+        try {
+          // Clone response to read it without consuming the original
+          const clonedResponse = response.clone();
+          const contentType = response.headers.get('content-type');
+          
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await clonedResponse.json();
+            errorDetails = errorData.error || errorData.message || errorDetails;
+            console.log('🔴 Authentication failed - Server error details:', errorData);
+          } else {
+            const errorText = await clonedResponse.text();
+            console.log('🔴 Authentication failed - Server response:', errorText);
+            if (errorText) {
+              errorDetails = errorText;
+            }
+          }
+        } catch (parseError) {
+          // If we can't parse the response, use default message
+          console.log('🔴 Could not parse error response:', parseError);
+        }
+        
+        console.log('🔴 Authentication failed:', {
+          status: response.status,
+          details: errorDetails,
+          url,
+          disableAutoRedirect
+        });
         
         // Clear cache on auth failure
         apiCache.clear();
@@ -144,7 +187,7 @@ export async function apiFetch(path, options = {}, cacheOptions = {}) {
           }
         }
         
-        throw new APIError('Authentication failed. Please log in again.', response.status, 'AUTH_FAILED');
+        throw new APIError(errorDetails || 'Authentication failed. Please log in again.', response.status, 'AUTH_FAILED');
       }
 
       if (!response.ok) {

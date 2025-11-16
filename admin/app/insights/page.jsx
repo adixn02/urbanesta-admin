@@ -82,22 +82,42 @@ export default function Logs() {
       // Check token before making API call
       const token = localStorage.getItem('token');
       if (!token) {
+        console.error('❌ No token found in localStorage');
         setError('Authentication required. Please refresh the page.');
         return;
       }
       
+      console.log('🔍 Fetching logs with token:', token.substring(0, 20) + '...');
+      
       const result = await fetchActivityLogs(appliedFilters, pagination.current, 40);
-      setLogs(result.logs);
-      setPagination(result.pagination);
+      
+      if (result && result.logs) {
+        console.log('✅ Logs fetched successfully:', result.logs.length, 'logs');
+        setLogs(result.logs);
+        setPagination(result.pagination);
+      } else {
+        throw new Error('Invalid response format from server');
+      }
     } catch (error) {
-      console.error('Error fetching logs:', error);
-      // Only show error if it's not an authentication error (those are handled by ProtectedRoute)
-      if (error.message && !error.message.includes('Authentication failed') && !error.message.includes('401') && !error.message.includes('403')) {
+      console.error('❌ Error in fetchLogs:', {
+        message: error.message,
+        status: error.status,
+        code: error.code,
+        name: error.name
+      });
+      
+      // Show error message to user
+      if (error.status === 401 || error.status === 403 || error.code === 'AUTH_FAILED') {
+        setError('Authentication failed. Your session may have expired. Please refresh the page to log in again.');
+      } else if (error.message) {
         setError('Failed to fetch logs: ' + error.message);
       } else {
-        // For auth errors, show a user-friendly message
-        setError('Unable to load logs. Please refresh the page or contact support if the issue persists.');
+        setError('Unable to load logs. Please check your connection and try again.');
       }
+      
+      // Set empty data on error
+      setLogs([]);
+      setPagination({ current: 1, pages: 1, total: 0, limit: 40 });
     } finally {
       setLoading(false);
     }
@@ -108,15 +128,28 @@ export default function Logs() {
       // Check token before making API call
       const token = localStorage.getItem('token');
       if (!token) {
-        console.warn('No token found, skipping summary fetch');
+        console.warn('⚠️ No token found, skipping summary fetch');
         return;
       }
       
+      console.log('🔍 Fetching summary with token:', token.substring(0, 20) + '...');
+      
       const summary = await fetchActivitySummary(7);
-      setSummary(summary);
+      
+      if (Array.isArray(summary)) {
+        console.log('✅ Summary fetched successfully:', summary.length, 'items');
+        setSummary(summary);
+      } else {
+        console.warn('⚠️ Invalid summary format, setting empty array');
+        setSummary([]);
+      }
     } catch (error) {
-      // Error fetching summary - don't show error as it's not critical
-      console.error('Error fetching activity summary:', error);
+      // Error fetching summary - log but don't show error as it's not critical
+      console.error('❌ Error fetching activity summary:', {
+        message: error.message,
+        status: error.status,
+        code: error.code
+      });
       setSummary([]);
     }
   };

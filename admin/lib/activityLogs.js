@@ -16,10 +16,17 @@ export const fetchActivityLogs = async (filters = {}, page = 1, limit = 40) => {
       limit: finalLimit.toString(),
       ...filters
     });
+    
+    const apiPath = `${API_PREFIX}/admin/logs?${queryParams.toString()}`;
+    console.log('🔍 Fetching activity logs from:', apiPath);
+    
     // Disable auto-redirect to prevent logout on insights page
-    const data = await apiFetch(`${API_PREFIX}/admin/logs?${queryParams.toString()}`, {
+    const data = await apiFetch(apiPath, {
       disableAutoRedirect: true
     });
+    
+    console.log('✅ Activity logs response:', data);
+    
     if (data.success) {
       return {
         logs: data.data,
@@ -29,21 +36,30 @@ export const fetchActivityLogs = async (filters = {}, page = 1, limit = 40) => {
       throw new Error(data.error || 'Failed to fetch activity logs');
     }
   } catch (error) {
-    // Error fetching activity logs - return empty data instead of crashing
-    console.error('Error fetching activity logs:', error);
-    return {
-      logs: [],
-      pagination: { current: 1, pages: 1, total: 0, limit: 40 }
-    };
+    // Error fetching activity logs - log full error details
+    console.error('❌ Error fetching activity logs:', {
+      message: error.message,
+      status: error.status,
+      code: error.code,
+      stack: error.stack
+    });
+    
+    // Re-throw the error so the calling component can handle it
+    throw error;
   }
 };
 
 export const fetchActivitySummary = async (days = 7) => {
   try {
+    const apiPath = `${API_PREFIX}/admin/logs/summary?days=${days}`;
+    console.log('🔍 Fetching activity summary from:', apiPath);
+    
     // Disable auto-redirect to prevent logout on insights page
-    const data = await apiFetch(`${API_PREFIX}/admin/logs/summary?days=${days}`, {
+    const data = await apiFetch(apiPath, {
       disableAutoRedirect: true
     });
+    
+    console.log('✅ Activity summary response:', data);
     
     if (data.success) {
       return data.data;
@@ -51,7 +67,13 @@ export const fetchActivitySummary = async (days = 7) => {
       throw new Error(data.error || 'Failed to fetch activity summary');
     }
   } catch (error) {
-    console.error('Error fetching activity summary:', error);
+    // Log full error details
+    console.error('❌ Error fetching activity summary:', {
+      message: error.message,
+      status: error.status,
+      code: error.code
+    });
+    // Return empty array instead of throwing to prevent page crash
     return [];
   }
 };
