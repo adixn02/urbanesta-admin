@@ -179,7 +179,21 @@ export const safeStorage = {
     try {
       if (typeof window === 'undefined') return defaultValue;
       const item = localStorage.getItem(key);
-      return item ? safeJSONParse(item, defaultValue) : defaultValue;
+      if (!item) return defaultValue;
+      
+      // Token is stored as plain string, not JSON - don't parse it
+      if (key === 'token') {
+        return item;
+      }
+      
+      // Try to parse as JSON, but if it fails and it's a string, return the string
+      try {
+        return JSON.parse(item);
+      } catch (parseError) {
+        // If parsing fails, it might be a plain string (like token)
+        // Return the original string value
+        return item;
+      }
     } catch (error) {
       console.error(`localStorage.getItem error for key "${key}":`, error);
       return defaultValue;
@@ -189,7 +203,12 @@ export const safeStorage = {
   setItem(key, value) {
     try {
       if (typeof window === 'undefined') return false;
-      localStorage.setItem(key, JSON.stringify(value));
+      // Token should be stored as plain string, not JSON
+      if (key === 'token') {
+        localStorage.setItem(key, value);
+      } else {
+        localStorage.setItem(key, JSON.stringify(value));
+      }
       return true;
     } catch (error) {
       console.error(`localStorage.setItem error for key "${key}":`, error);
