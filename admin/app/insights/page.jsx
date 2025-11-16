@@ -8,7 +8,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { API_BASE_URL } from '@/lib/config';
 
 export default function Logs() {
-  const { logout } = useAuth();
+  const { logout, user, isAuthenticated, loading: authLoading } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState([]);
@@ -45,21 +45,27 @@ export default function Logs() {
   };
 
   useEffect(() => {
-    // Add a small delay to ensure authentication is ready
-    const timer = setTimeout(() => {
-      fetchSummary();
-    }, 100);
+    // Only fetch data if user is authenticated and not loading
+    if (!authLoading && isAuthenticated && user) {
+      // Add a small delay to ensure authentication is fully ready
+      const timer = setTimeout(() => {
+        fetchSummary();
+      }, 100);
 
-    return () => clearTimeout(timer);
-  }, []);
+      return () => clearTimeout(timer);
+    }
+  }, [authLoading, isAuthenticated, user]);
 
   useEffect(() => {
-    if (activeTab === 'activity') {
-      fetchLogs();
-    } else if (activeTab === 'video') {
-      fetchVideoLogs();
+    // Only fetch data if user is authenticated
+    if (!authLoading && isAuthenticated && user) {
+      if (activeTab === 'activity') {
+        fetchLogs();
+      } else if (activeTab === 'video') {
+        fetchVideoLogs();
+      }
     }
-  }, [pagination.current, appliedFilters, activeTab, videoPagination.current]);
+  }, [pagination.current, appliedFilters, activeTab, videoPagination.current, authLoading, isAuthenticated, user]);
 
   const fetchLogs = async () => {
     try {
@@ -88,6 +94,12 @@ export default function Logs() {
       setVideoLoading(true);
       const token = localStorage.getItem('token');
       
+      // Check if token exists before making API call
+      if (!token) {
+        console.warn('No token found, skipping video logs fetch');
+        return;
+      }
+      
       const queryParams = new URLSearchParams({
         page: videoPagination.current,
         limit: 40,
@@ -100,8 +112,16 @@ export default function Logs() {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
-        }
+        },
+        credentials: 'include' // Include cookies in request
       });
+
+      // Handle authentication errors
+      if (response.status === 401 || response.status === 403) {
+        console.warn('Authentication failed for video logs, user will be redirected by ProtectedRoute');
+        // Don't set error, let ProtectedRoute handle the redirect
+        return;
+      }
 
       if (!response.ok) {
         throw new Error('Failed to fetch video logs');
@@ -111,7 +131,10 @@ export default function Logs() {
       setVideoLogs(data.logs);
       setVideoPagination(data.pagination);
     } catch (error) {
-      setError('Failed to fetch video logs: ' + error.message);
+      // Only set error if it's not an authentication error
+      if (!error.message.includes('401') && !error.message.includes('403')) {
+        setError('Failed to fetch video logs: ' + error.message);
+      }
     } finally {
       setVideoLoading(false);
     }
