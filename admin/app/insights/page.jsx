@@ -47,6 +47,13 @@ export default function Logs() {
   useEffect(() => {
     // Only fetch data if user is authenticated and not loading
     if (!authLoading && isAuthenticated && user) {
+      // Double-check token exists before making API calls
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.warn('No token found, skipping insights data fetch');
+        return;
+      }
+      
       // Add a small delay to ensure authentication is fully ready
       const timer = setTimeout(() => {
         fetchSummary();
@@ -70,11 +77,27 @@ export default function Logs() {
   const fetchLogs = async () => {
     try {
       setLoading(true);
+      setError(null); // Clear previous errors
+      
+      // Check token before making API call
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Authentication required. Please refresh the page.');
+        return;
+      }
+      
       const result = await fetchActivityLogs(appliedFilters, pagination.current, 40);
       setLogs(result.logs);
       setPagination(result.pagination);
     } catch (error) {
-      setError('Failed to fetch logs: ' + error.message);
+      console.error('Error fetching logs:', error);
+      // Only show error if it's not an authentication error (those are handled by ProtectedRoute)
+      if (error.message && !error.message.includes('Authentication failed') && !error.message.includes('401') && !error.message.includes('403')) {
+        setError('Failed to fetch logs: ' + error.message);
+      } else {
+        // For auth errors, show a user-friendly message
+        setError('Unable to load logs. Please refresh the page or contact support if the issue persists.');
+      }
     } finally {
       setLoading(false);
     }
@@ -82,10 +105,19 @@ export default function Logs() {
 
   const fetchSummary = async () => {
     try {
+      // Check token before making API call
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.warn('No token found, skipping summary fetch');
+        return;
+      }
+      
       const summary = await fetchActivitySummary(7);
       setSummary(summary);
     } catch (error) {
-      // Error fetching summary
+      // Error fetching summary - don't show error as it's not critical
+      console.error('Error fetching activity summary:', error);
+      setSummary([]);
     }
   };
 

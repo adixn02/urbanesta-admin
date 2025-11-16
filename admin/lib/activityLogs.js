@@ -16,7 +16,10 @@ export const fetchActivityLogs = async (filters = {}, page = 1, limit = 40) => {
       limit: finalLimit.toString(),
       ...filters
     });
-    const data = await apiFetch(`${API_PREFIX}/admin/logs?${queryParams.toString()}`);
+    // Disable auto-redirect to prevent logout on insights page
+    const data = await apiFetch(`${API_PREFIX}/admin/logs?${queryParams.toString()}`, {
+      disableAutoRedirect: true
+    });
     if (data.success) {
       return {
         logs: data.data,
@@ -26,7 +29,8 @@ export const fetchActivityLogs = async (filters = {}, page = 1, limit = 40) => {
       throw new Error(data.error || 'Failed to fetch activity logs');
     }
   } catch (error) {
-    // Error fetching activity logs
+    // Error fetching activity logs - return empty data instead of crashing
+    console.error('Error fetching activity logs:', error);
     return {
       logs: [],
       pagination: { current: 1, pages: 1, total: 0, limit: 40 }
@@ -36,7 +40,10 @@ export const fetchActivityLogs = async (filters = {}, page = 1, limit = 40) => {
 
 export const fetchActivitySummary = async (days = 7) => {
   try {
-    const data = await apiFetch(`${API_PREFIX}/admin/logs/summary?days=${days}`);
+    // Disable auto-redirect to prevent logout on insights page
+    const data = await apiFetch(`${API_PREFIX}/admin/logs/summary?days=${days}`, {
+      disableAutoRedirect: true
+    });
     
     if (data.success) {
       return data.data;

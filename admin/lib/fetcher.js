@@ -44,6 +44,9 @@ export async function apiFetch(path, options = {}, cacheOptions = {}) {
   ];
   const isPublicEndpoint = publicEndpoints.some(endpoint => path.startsWith(endpoint));
   
+  // Check if auto-redirect should be disabled (for insights page and similar)
+  const disableAutoRedirect = options.disableAutoRedirect || cacheOptions.disableAutoRedirect || false;
+  
   if (!token && !isPublicEndpoint) {
     console.warn('🔒 API call blocked: No authentication token found');
     
@@ -52,11 +55,14 @@ export async function apiFetch(path, options = {}, cacheOptions = {}) {
       safeStorage.removeItem('token');
       safeStorage.removeItem('user');
       
-      // Redirect to login if not already there
-      const currentPath = window.location.pathname;
-      if (currentPath !== '/' && !isRedirectingToLogin) {
-        isRedirectingToLogin = true;
-        window.location.replace('/?redirect=' + encodeURIComponent(currentPath));
+      // Only redirect if auto-redirect is enabled
+      if (!disableAutoRedirect) {
+        // Redirect to login if not already there
+        const currentPath = window.location.pathname;
+        if (currentPath !== '/' && !isRedirectingToLogin) {
+          isRedirectingToLogin = true;
+          window.location.replace('/?redirect=' + encodeURIComponent(currentPath));
+        }
       }
     }
     
@@ -85,10 +91,13 @@ export async function apiFetch(path, options = {}, cacheOptions = {}) {
     }
 
     try {
+      // Remove disableAutoRedirect from options before passing to fetch (it's not a valid fetch option)
+      const { disableAutoRedirect: _, ...fetchOptions } = options;
+      
       const response = await fetch(url, {
         credentials: 'include',
         headers,
-        ...options,
+        ...fetchOptions,
       });
 
       // Handle authentication errors (401 Unauthorized, 403 Forbidden)
@@ -98,6 +107,9 @@ export async function apiFetch(path, options = {}, cacheOptions = {}) {
         // Clear cache on auth failure
         apiCache.clear();
         
+        // Get disableAutoRedirect from closure scope (set at function level)
+        const shouldDisableRedirect = disableAutoRedirect;
+        
         // Clear auth state
         if (typeof window !== 'undefined') {
           // Clear auth data
@@ -106,24 +118,29 @@ export async function apiFetch(path, options = {}, cacheOptions = {}) {
           document.cookie = 'urbanesta_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
           document.cookie = 'urbanesta_refresh_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
           
-          // Check if we should redirect
-          const currentPath = window.location.pathname;
-          const isAlreadyOnLogin = currentPath === '/';
-          
-          // Prevent multiple simultaneous redirects
-          if (!isAlreadyOnLogin && !isRedirectingToLogin) {
-            console.log('🔴 Redirecting to login from:', currentPath);
-            isRedirectingToLogin = true;
+          // Only redirect if auto-redirect is not disabled
+          if (!shouldDisableRedirect) {
+            // Check if we should redirect
+            const currentPath = window.location.pathname;
+            const isAlreadyOnLogin = currentPath === '/';
             
-            // Mark in sessionStorage that we're in auth failure state
-            sessionStorage.setItem('auth_redirect', Date.now().toString());
-            
-            // Use setTimeout to avoid any race conditions with React state updates
-            setTimeout(() => {
-              window.location.href = `/?redirect=${encodeURIComponent(currentPath)}`;
-            }, 100);
+            // Prevent multiple simultaneous redirects
+            if (!isAlreadyOnLogin && !isRedirectingToLogin) {
+              console.log('🔴 Redirecting to login from:', currentPath);
+              isRedirectingToLogin = true;
+              
+              // Mark in sessionStorage that we're in auth failure state
+              sessionStorage.setItem('auth_redirect', Date.now().toString());
+              
+              // Use setTimeout to avoid any race conditions with React state updates
+              setTimeout(() => {
+                window.location.href = `/?redirect=${encodeURIComponent(currentPath)}`;
+              }, 100);
+            } else {
+              console.log('🔴 Already on login page or redirecting, not redirecting again');
+            }
           } else {
-            console.log('🔴 Already on login page or redirecting, not redirecting again');
+            console.log('🔴 Auto-redirect disabled for this request, throwing error instead');
           }
         }
         
