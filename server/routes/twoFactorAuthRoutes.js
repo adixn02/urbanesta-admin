@@ -46,13 +46,20 @@ const IP_BLOCK_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 // Send OTP endpoint
 router.post('/send-otp', async (req, res) => {
   try {
-    const { phoneNumber } = req.body;
+    const { phoneNumber, password } = req.body;
     const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
 
     if (!phoneNumber) {
       return res.status(400).json({ 
         success: false, 
         error: 'Phone number is required' 
+      });
+    }
+
+    if (!password) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Password is required' 
       });
     }
 
@@ -106,8 +113,19 @@ router.post('/send-otp', async (req, res) => {
     }
 
     // Check if user exists in admin database
-    const dbFormattedPhone = twoFactorService.formatPhoneNumber(phoneNumber);
-    const existingUser = await Admin.findOne({ phoneNumber: dbFormattedPhone });
+    // Try multiple phone number formats to handle legacy data
+    const cleanedPhone = phoneNumber.replace(/\D/g, '');
+    const phoneFormats = [
+      cleanedPhone.startsWith('91') ? cleanedPhone.substring(2) : cleanedPhone, // 9034779597
+      cleanedPhone.startsWith('91') ? cleanedPhone : `91${cleanedPhone}`, // 919034779597
+      `+${cleanedPhone.startsWith('91') ? cleanedPhone : `91${cleanedPhone}`}`, // +919034779597
+      twoFactorService.formatPhoneNumber(phoneNumber) // Use service formatter
+    ];
+    
+    // Search with all possible formats
+    const existingUser = await Admin.findOne({ 
+      phoneNumber: { $in: phoneFormats } 
+    }).select('+password');
     
     if (!existingUser) {
       // Increment IP attempt counter for unauthorized access
@@ -180,6 +198,49 @@ router.post('/send-otp', async (req, res) => {
       });
     }
 
+    // Verify password
+    if (existingUser.password) {
+      const isPasswordValid = await existingUser.comparePassword(password);
+      if (!isPasswordValid) {
+        // Increment IP attempt counter for wrong password
+        if (!ipData) {
+          ipAttempts.set(clientIP, { attempts: 1, firstAttempt: new Date() });
+        } else {
+          ipData.attempts += 1;
+          ipAttempts.set(clientIP, ipData);
+        }
+        
+        logger.warn(`Wrong password attempt for: ${phoneNumber} (IP: ${clientIP})`);
+        
+        // Log wrong password attempt
+        try {
+          await ActivityLog.logActivity({
+            userId: existingUser._id,
+            userPhone: existingUser.phoneNumber,
+            userName: existingUser.name || 'Unknown',
+            userRole: existingUser.role || 'user',
+            action: 'login_failed',
+            resource: 'Authentication',
+            resourceId: existingUser._id,
+            details: `Wrong password attempt for: ${phoneNumber}`,
+            ipAddress: clientIP,
+            userAgent: req.get('User-Agent') || 'unknown',
+            severity: 'high',
+            status: 'failed',
+            metadata: { phoneNumber, reason: 'wrong_password' }
+          });
+        } catch (logError) {
+          logger.error('Failed to log wrong password attempt:', logError);
+        }
+        
+        return res.status(401).json({
+          success: false,
+          error: 'Incorrect password. Please try again.',
+          code: 'WRONG_PASSWORD'
+        });
+      }
+    }
+
     // Send OTP using 2Factor service
     const result = await twoFactorService.sendOTP(phoneNumber);
 
@@ -236,7 +297,8 @@ router.post('/send-otp', async (req, res) => {
         otpType: result.type || 'sms', // Inform frontend about OTP type
         isFallback: result.fallback || false, // Inform if this was a fallback
         expiresIn: OTP_EXPIRY_TIME / 1000, // OTP expires in seconds
-        expiresAt: new Date(Date.now() + OTP_EXPIRY_TIME).toISOString() // Exact expiration time
+        expiresAt: new Date(Date.now() + OTP_EXPIRY_TIME).toISOString(), // Exact expiration time
+        userName: existingUser.name // Send user name to frontend
       });
     } else {
       logger.error('Failed to send OTP:', result.error);
@@ -382,32 +444,22 @@ router.post('/verify-otp', async (req, res) => {
         logger.info(`Looking for admin user with phone: ${session.phoneNumber}`);
         
         // Try multiple phone number formats to find the user
-        let user = await Admin.findOne({ phoneNumber: session.phoneNumber });
+        const cleanedPhone = session.phoneNumber.replace(/\D/g, '');
+        const phoneFormats = [
+          session.phoneNumber, // Original format
+          cleanedPhone.startsWith('91') ? cleanedPhone.substring(2) : cleanedPhone, // 9034779597
+          cleanedPhone.startsWith('91') ? cleanedPhone : `91${cleanedPhone}`, // 919034779597
+          `+${cleanedPhone.startsWith('91') ? cleanedPhone : `91${cleanedPhone}`}`, // +919034779597
+        ];
         
-        // If not found, try without + prefix
-        if (!user && session.phoneNumber.startsWith('+')) {
-          const phoneWithoutPlus = session.phoneNumber.substring(1);
-          logger.info(`Trying phone number without + prefix: ${phoneWithoutPlus}`);
-          user = await Admin.findOne({ phoneNumber: phoneWithoutPlus });
-        }
+        // Remove duplicates
+        const uniqueFormats = [...new Set(phoneFormats)];
+        logger.info(`Searching for user with phone formats: ${uniqueFormats.join(', ')}`);
         
-        // If still not found, try with different formats
-        if (!user) {
-          const phoneDigits = session.phoneNumber.replace(/\D/g, '');
-          // Try with +91 prefix
-          if (phoneDigits.length === 12 && phoneDigits.startsWith('91')) {
-            const phoneWithPlus = `+${phoneDigits}`;
-            logger.info(`Trying phone number with +91 prefix: ${phoneWithPlus}`);
-            user = await Admin.findOne({ phoneNumber: phoneWithPlus });
-          }
-          // Try with just 10 digits (last 10 digits)
-          if (!user && phoneDigits.length >= 10) {
-            const last10Digits = phoneDigits.slice(-10);
-            const phoneWithCountryCode = `+91${last10Digits}`;
-            logger.info(`Trying phone number with last 10 digits: ${phoneWithCountryCode}`);
-            user = await Admin.findOne({ phoneNumber: phoneWithCountryCode });
-          }
-        }
+        // Search with all possible formats
+        const user = await Admin.findOne({ 
+          phoneNumber: { $in: uniqueFormats } 
+        });
         
         logger.info(`Admin user found: ${user ? 'Yes' : 'No'}`, { 
           searchedPhone: session.phoneNumber,
@@ -733,29 +785,79 @@ router.get('/me', verify2FactorSession, async (req, res) => {
   }
 });
 
-// Logout endpoint (2Factor) - requires authentication to log activity
-router.post('/logout', authenticateJWT, logActivity, async (req, res) => {
+// Logout endpoint (2Factor) - works even if token is expired/invalid
+// This endpoint doesn't require authentication to allow logout even with expired tokens
+router.post('/logout', async (req, res) => {
+  let userInfo = null;
+  
+  // Try to authenticate, but don't fail if token is invalid/expired
+  // This allows logout to work even when token has expired
+  try {
+    // Get token from Authorization header or cookie
+    let token = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    }
+    
+    if (!token) {
+      const cookies = cookie.parse(req.headers.cookie || '');
+      token = cookies.token || cookies.urbanesta_token;
+    }
+    
+    // Try to decode token if it exists
+    if (token) {
+      try {
+        const jwt = (await import('jsonwebtoken')).default;
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        userInfo = {
+          id: decoded.id,
+          phoneNumber: decoded.phoneNumber,
+          name: decoded.name
+        };
+      } catch (jwtError) {
+        // Token invalid/expired - that's okay for logout
+      }
+    }
+  } catch (error) {
+    // Ignore auth errors for logout
+  }
+
   try {
     // Clear 2Factor session if exists
-    const sessionToken = req.cookies.urbanesta_2factor_session;
+    const sessionToken = req.cookies?.urbanesta_2factor_session;
     
     if (sessionToken) {
-      // Decode and remove session
-      const decoded = Buffer.from(sessionToken, 'base64').toString('ascii');
-      const [sessionId] = decoded.split(':');
-      otpSessions.delete(sessionId);
+      try {
+        // Decode and remove session
+        const decoded = Buffer.from(sessionToken, 'base64').toString('ascii');
+        const [sessionId] = decoded.split(':');
+        otpSessions.delete(sessionId);
+      } catch (decodeError) {
+        // Ignore decode errors
+      }
     }
 
-    // Set activity data for logging before clearing cookies
-    req.activityData = {
-      action: 'logout',
-      resource: 'Authentication',
-      resourceId: req.user.id,
-      details: `User logged out successfully`,
-      severity: 'low'
-    };
+    // Log activity if user is authenticated
+    if (userInfo) {
+      try {
+        const ActivityLog = (await import('../models/ActivityLog.js')).default;
+        await ActivityLog.create({
+          userId: userInfo.id,
+          action: 'logout',
+          resource: 'Authentication',
+          resourceId: userInfo.id,
+          details: `User logged out successfully`,
+          severity: 'low',
+          ipAddress: req.ip || req.connection.remoteAddress,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logError) {
+        // Ignore logging errors
+      }
+    }
 
-    // Clear authentication cookies
+    // Clear authentication cookies (always do this, even if not authenticated)
     res.clearCookie('urbanesta_2factor_session', {
       path: '/',
       httpOnly: true,
@@ -777,14 +879,24 @@ router.post('/logout', authenticateJWT, logActivity, async (req, res) => {
       sameSite: 'lax'
     });
 
-    logger.info(`User logged out: ${req.user.phoneNumber}`);
+    if (userInfo) {
+      logger.info(`User logged out: ${userInfo.phoneNumber}`);
+    } else {
+      logger.info('User logged out (token expired/invalid)');
+    }
+    
     res.json({ success: true, message: 'Logged out successfully' });
 
   } catch (error) {
+    // Even on error, clear cookies and return success
+    res.clearCookie('urbanesta_2factor_session', { path: '/' });
+    res.clearCookie('urbanesta_token', { path: '/' });
+    res.clearCookie('urbanesta_refresh_token', { path: '/' });
+    
     logger.error('Logout error', { error: error.message });
-    res.status(500).json({ 
-      success: false, 
-      error: 'Logout failed' 
+    res.json({ 
+      success: true, // Return success even on error to allow logout to complete
+      message: 'Logged out successfully' 
     });
   }
 });

@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import Admin from '../models/Admin.js';
 import ActivityLog from '../models/ActivityLog.js';
 import { authenticateJWT } from '../middleware/jwtAuth.js';
@@ -109,7 +110,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
 // Create new admin/subadmin
 router.post('/users', requireAdmin, logActivity, async (req, res) => {
   try {
-    const { name, phoneNumber, email, role, permissions } = req.body;
+    const { name, phoneNumber, role, permissions, password } = req.body;
     
     // Validate role
     if (!['admin', 'subadmin'].includes(role)) {
@@ -131,12 +132,58 @@ router.post('/users', requireAdmin, logActivity, async (req, res) => {
       });
     }
     
-    // Check if phone number already exists
-    const existingUser = await Admin.findOne({ phoneNumber });
+    // Normalize phone number (remove all non-digits, keep only last 10 digits for Indian numbers)
+    const cleanedPhone = phoneNumber.replace(/\D/g, '');
+    let normalizedPhone;
+    
+    if (cleanedPhone.length === 10) {
+      // 10 digits: assume Indian number without country code
+      normalizedPhone = cleanedPhone;
+    } else if (cleanedPhone.length === 12 && cleanedPhone.startsWith('91')) {
+      // 12 digits starting with 91: remove country code
+      normalizedPhone = cleanedPhone.substring(2);
+    } else if (cleanedPhone.length >= 10) {
+      // Take last 10 digits
+      normalizedPhone = cleanedPhone.slice(-10);
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid phone number format. Must be 10 digits.'
+      });
+    }
+    
+    // Check if phone number already exists (check multiple formats)
+    const phoneFormats = [
+      normalizedPhone, // 9034779597
+      `91${normalizedPhone}`, // 919034779597
+      `+91${normalizedPhone}`, // +919034779597
+    ];
+    
+    const existingUser = await Admin.findOne({ 
+      phoneNumber: { $in: phoneFormats } 
+    });
+    
     if (existingUser) {
       return res.status(400).json({
         success: false,
         error: 'User with this phone number already exists'
+      });
+    }
+    
+    // Validate password (required for both admin and subadmin)
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        error: `Password is required for ${role}`
+      });
+    }
+    
+    // Validate password strength (allow all common special characters)
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+    if (!passwordRegex.test(password)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character'
       });
     }
     
@@ -148,24 +195,63 @@ router.post('/users', requireAdmin, logActivity, async (req, res) => {
       userPermissions = permissions || ['dashboard', 'cities', 'builders', 'properties'];
     }
     
-    const newUser = new Admin({
+    // Build user data object (NO EMAIL - explicitly exclude email field)
+    const userData = {
       name,
-      phoneNumber,
-      email: email || '',
+      phoneNumber: normalizedPhone, // Use normalized phone number (10 digits)
+      password: password, // Password is now required
       role,
       permissions: userPermissions,
       createdBy: req.user.id,
       isActive: true
-    });
+    };
     
-    await newUser.save();
+    // Explicitly ensure email is not included (even if somehow set)
+    delete userData.email;
+
+    // Hash password before saving (since we'll use insertOne directly)
+    const bcrypt = (await import('bcryptjs')).default;
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // Use native MongoDB insertOne to avoid email field being set to null
+    // This prevents duplicate key errors with old email unique index
+    const insertData = {
+      name,
+      phoneNumber: normalizedPhone,
+      password: hashedPassword,
+      role,
+      permissions: userPermissions,
+      createdBy: new mongoose.Types.ObjectId(req.user.id), // Convert to ObjectId
+      isActive: true,
+      lastActivity: new Date(),
+      loginCount: 0,
+      preferences: {
+        notifications: {
+          email: true,
+          sms: false
+        }
+      },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    // Explicitly do NOT include email field
+    const result = await Admin.collection.insertOne(insertData);
+    
+    // Fetch the created user using Mongoose to get proper document
+    const newUser = await Admin.findById(result.insertedId);
+    
+    if (!newUser) {
+      throw new Error('Failed to retrieve created user');
+    }
     
     // Log activity
     req.activityData = {
       action: 'create_user',
       resource: 'User',
       resourceId: newUser._id,
-      details: `Created ${role} user: ${name} (${phoneNumber})`,
+      details: `Created ${role} user: ${name} (${normalizedPhone})`,
       severity: 'medium'
     };
     
@@ -175,10 +261,84 @@ router.post('/users', requireAdmin, logActivity, async (req, res) => {
       message: `${role} user created successfully`
     });
   } catch (error) {
-    logger.error('Error creating admin user:', { error: error.message });
+    logger.error('Error creating admin user:', { 
+      error: error.message,
+      stack: error.stack,
+      name: error.name,
+      code: error.code,
+      phoneNumber: req.body.phoneNumber
+    });
+    
+    // Handle specific MongoDB errors
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern || {})[0];
+      const duplicateValue = error.keyValue || {};
+      
+      logger.error('Duplicate key error:', {
+        field,
+        duplicateValue,
+        keyPattern: error.keyPattern,
+        keyValue: error.keyValue
+      });
+      
+      // Handle email field error (email is not used in current schema but may exist in DB)
+      // This happens when database has old email unique index
+      if (field === 'email') {
+        // Get phone number from request body to check if it's actually a phone duplicate
+        const requestPhone = req.body.phoneNumber?.replace(/\D/g, '').slice(-10);
+        if (requestPhone) {
+          // Check multiple phone formats
+          const phoneFormats = [
+            requestPhone,
+            `91${requestPhone}`,
+            `+91${requestPhone}`
+          ];
+          
+          // Check if it's actually a phone number duplicate by checking the phone number
+          const phoneCheck = await Admin.findOne({ 
+            phoneNumber: { $in: phoneFormats }
+          });
+          
+          if (phoneCheck) {
+            return res.status(400).json({
+              success: false,
+              error: 'User with this phone number already exists'
+            });
+          }
+        }
+        
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to create user. Please contact administrator to fix database configuration.'
+        });
+      }
+      
+      // Handle phone number duplicate
+      if (field === 'phoneNumber') {
+        return res.status(400).json({
+          success: false,
+          error: 'User with this phone number already exists'
+        });
+      }
+      
+      return res.status(400).json({
+        success: false,
+        error: `User with this ${field} already exists`
+      });
+    }
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        error: messages.join(', ')
+      });
+    }
+    
     res.status(500).json({
       success: false,
-      error: 'Failed to create admin user'
+      error: error.message || 'Failed to create admin user'
     });
   }
 });
@@ -186,15 +346,26 @@ router.post('/users', requireAdmin, logActivity, async (req, res) => {
 // Update admin user
 router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
   try {
-    const { name, email, role, permissions, isActive } = req.body;
+    const { name, email, role, permissions, isActive, password } = req.body;
     const userId = req.params.id;
+    const currentUserId = req.user._id.toString(); // Currently logged-in admin
     
-    // Don't allow changing the main admin (phone: 8198982098)
+    // Don't allow modifying protected super admins
+    // Protected phone numbers: 9181989882098, 8198982098 (main admin), 9650089892 (Anil Mann - super admin)
     const user = await Admin.findById(userId);
-    if (user && user.phoneNumber === '8198982098') {
+    const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
+    if (user && protectedPhones.includes(user.phoneNumber)) {
       return res.status(400).json({
         success: false,
-        error: 'Cannot modify the main admin account'
+        error: 'Cannot modify protected super admin account'
+      });
+    }
+    
+    // Prevent admin from deactivating themselves
+    if (userId === currentUserId && isActive === false) {
+      return res.status(400).json({
+        success: false,
+        error: 'You cannot deactivate your own account. Please ask another admin to deactivate your account if needed.'
       });
     }
     
@@ -215,6 +386,19 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
     }
     if (permissions) updateData.permissions = permissions;
     if (isActive !== undefined) updateData.isActive = isActive;
+    
+    // Update password if provided
+    if (password) {
+      // Validate password strength (allow all common special characters)
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+      if (!passwordRegex.test(password)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character'
+        });
+      }
+      updateData.password = password;
+    }
     
     const updatedUser = await Admin.findByIdAndUpdate(
       userId,
@@ -256,13 +440,33 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
 router.delete('/users/:id', requireAdmin, logActivity, async (req, res) => {
   try {
     const userId = req.params.id;
+    const currentUserId = req.user._id?.toString(); // Currently logged-in admin
     
-    // Don't allow deleting the main admin (phone: 8198982098)
-    const user = await Admin.findById(userId);
-    if (user && user.phoneNumber === '8198982098') {
+    // Prevent admin from deleting themselves
+    // Compare IDs as strings to handle both ObjectId and string formats
+    if (userId && currentUserId && userId.toString() === currentUserId) {
       return res.status(400).json({
         success: false,
-        error: 'Cannot delete the main admin account'
+        error: 'You cannot delete your own account. Please ask another admin to delete your account if needed.'
+      });
+    }
+    
+    // Don't allow deleting protected super admins
+    // Protected phone numbers: 9181989882098, 8198982098 (main admin), 9650089892 (Anil Mann - super admin)
+    const user = await Admin.findById(userId);
+    const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
+    if (user && protectedPhones.includes(user.phoneNumber)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot delete protected super admin account'
+      });
+    }
+    
+    // Double-check by phone number (if current user phone matches target user phone)
+    if (user && req.user.phoneNumber && user.phoneNumber === req.user.phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        error: 'You cannot delete your own account! Please ask another admin to delete your account if needed.'
       });
     }
     
@@ -455,6 +659,81 @@ router.post('/verify-otp-for-user', requireAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to verify OTP'
+    });
+  }
+});
+
+// Change password endpoint
+router.post('/change-password', authenticateJWT, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.id;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'Current password and new password are required'
+      });
+    }
+
+    // Get user with password
+    const user = await Admin.findById(userId).select('+password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Verify current password
+    if (!user.password) {
+      return res.status(400).json({
+        success: false,
+        error: 'No password set for this account. Please contact administrator.'
+      });
+    }
+
+    const isCurrentPasswordValid = await user.comparePassword(currentPassword);
+    if (!isCurrentPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        error: 'Current password is incorrect'
+      });
+    }
+
+    // Validate new password strength (allow all common special characters)
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+    if (!passwordRegex.test(newPassword)) {
+      return res.status(400).json({
+        success: false,
+        error: 'New password must be at least 8 characters and contain uppercase, lowercase, number, and special character'
+      });
+    }
+
+    // Check if new password is same as current
+    const isSamePassword = await user.comparePassword(newPassword);
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'New password must be different from current password'
+      });
+    }
+
+    // Update password
+    user.password = newPassword;
+    await user.save();
+
+    logger.info(`Password changed successfully for user: ${user.name} (${user.phoneNumber})`);
+
+    res.json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    logger.error('Error changing password:', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to change password'
     });
   }
 });

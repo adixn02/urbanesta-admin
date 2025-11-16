@@ -2,8 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import Header from '@/components/header';
 import Sidebar from '@/components/sidebar';
+import ProtectedRoute from '@/components/ProtectedRoute';
 import AddSubadmin from '@/components/addsubadmin';
-import ChangeAdmin from '@/components/changeadmin';
+import AddAdmin from '@/components/addadmin';
+import ChangePassword from '@/components/changepassword';
 
 export default function Settings() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -23,7 +25,6 @@ export default function Settings() {
   const [newUser, setNewUser] = useState({
     name: '',
     phoneNumber: '',
-    email: '',
     role: 'subadmin',
     permissions: []
   });
@@ -40,7 +41,9 @@ export default function Settings() {
   const [otpLoading, setOtpLoading] = useState(false);
   const [otpError, setOtpError] = useState('');
   const [showAddSubadminModal, setShowAddSubadminModal] = useState(false);
-  const [showChangeAdminModal, setShowChangeAdminModal] = useState(false);
+  const [showAddAdminModal, setShowAddAdminModal] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
 
@@ -62,6 +65,12 @@ export default function Settings() {
   useEffect(() => {
     fetchUsersData();
     fetchStats();
+    
+    // Get current user from localStorage
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      setCurrentUser(JSON.parse(storedUser));
+    }
   }, []);
 
   const fetchUsersData = async () => {
@@ -154,7 +163,6 @@ export default function Settings() {
         setOtpCode('');
         setShowAddModal(false);
         setEditingUser(null);
-        setShowChangeAdminModal(false);
         setShowAddSubadminModal(false);
       } else {
         setOtpError(data.error || 'Failed to send OTP');
@@ -173,27 +181,33 @@ export default function Settings() {
     setError('');
 
     try {
+      // Remove confirmPassword before sending to backend (if it exists)
+      const { confirmPassword, ...dataToSend } = userData || {};
+      
       const response = await fetch(`${API_BASE_URL}/api/admin/users`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(userData)
+        body: JSON.stringify(dataToSend)
       });
 
       const data = await response.json();
 
       if (data.success) {
         setSuccess('User created successfully');
+        setShowAddSubadminModal(false); // Close subadmin modal
+        setShowAddAdminModal(false); // Close add admin modal
         setShowAddModal(false);
-        setNewUser({ name: '', phoneNumber: '', email: '', role: 'subadmin', permissions: [] });
+        setNewUser({ name: '', phoneNumber: '', role: 'subadmin', permissions: [] });
         fetchUsersData();
         fetchStats();
       } else {
         setError(data.error || 'Failed to create user');
       }
     } catch (error) {
+      console.error('Create user error:', error); // Debug log
       setError('Failed to create user: ' + error.message);
     } finally {
       setLoading(false);
@@ -218,26 +232,41 @@ export default function Settings() {
     setError('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/admin/users/${userData._id}`, {
+      // Remove confirmPassword and _id from body (send _id only in URL)
+      const { confirmPassword, _id, ...dataToSend } = userData || {};
+      
+      console.log('Updating user with data:', { _id, dataToSend }); // Debug log
+      
+      const response = await fetch(`${API_BASE_URL}/api/admin/users/${_id}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(userData)
+        body: JSON.stringify(dataToSend)
       });
 
       const data = await response.json();
+      console.log('Update user response:', data); // Debug log
 
       if (data.success) {
         setSuccess('User updated successfully');
         setEditingUser(null);
         fetchUsersData();
         fetchStats();
+        
+        // If admin updated their own details, update localStorage
+        const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+        if (currentUser._id === _id) {
+          const updatedUser = { ...currentUser, ...dataToSend };
+          localStorage.setItem('user', JSON.stringify(updatedUser));
+          setCurrentUser(updatedUser);
+        }
       } else {
         setError(data.error || 'Failed to update user');
       }
     } catch (error) {
+      console.error('Update user error:', error); // Debug log
       setError('Failed to update user: ' + error.message);
     } finally {
       setLoading(false);
@@ -246,9 +275,33 @@ export default function Settings() {
 
   const handleDeleteUser = async (userId) => {
     const user = users.find(u => u._id === userId);
-    const userName = user?.name || 'this subadmin';
+    const userName = user?.name || 'this user';
+    const userRole = user?.role === 'admin' ? 'Admin' : 'Subadmin';
     
-    if (!confirm(`Are you sure you want to remove ${userName}? This action cannot be undone.`)) return;
+    // Extra protection for protected super admins
+    // Protected phone numbers: 9181989882098, 8198982098 (main admin), 9650089892 (Anil Mann - super admin)
+    const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
+    if (user && protectedPhones.includes(user.phoneNumber)) {
+      setError('Cannot delete protected super admin account!');
+      return;
+    }
+    
+    // Prevent deleting yourself (currently logged-in user)
+    // Compare IDs as strings to handle both ObjectId and string formats
+    const currentUserId = currentUser?._id?.toString();
+    const targetUserId = user?._id?.toString();
+    if (currentUser && currentUserId === targetUserId) {
+      setError('You cannot delete your own account! Please ask another admin to delete your account if needed.');
+      return;
+    }
+    
+    // Also check by phone number as backup
+    if (currentUser && user?.phoneNumber === currentUser.phoneNumber) {
+      setError('You cannot delete your own account! Please ask another admin to delete your account if needed.');
+      return;
+    }
+    
+    if (!confirm(`⚠️ Are you sure you want to DELETE ${userName} (${userRole})?\n\nThis action CANNOT be undone!`)) return;
 
     setLoading(true);
     setError('');
@@ -265,14 +318,14 @@ export default function Settings() {
       const data = await response.json();
 
       if (data.success) {
-        setSuccess(`Subadmin ${userName} removed successfully`);
+        setSuccess(`${userRole} "${userName}" has been permanently deleted successfully`);
         fetchUsersData();
         fetchStats();
       } else {
-        setError(data.error || 'Failed to remove subadmin');
+        setError(data.error || `Failed to delete ${userRole.toLowerCase()}`);
       }
     } catch (error) {
-      setError('Failed to remove subadmin: ' + error.message);
+      setError(`Failed to delete ${userRole.toLowerCase()}: ` + error.message);
     } finally {
       setLoading(false);
     }
@@ -281,6 +334,28 @@ export default function Settings() {
   const toggleUserStatus = async (userId, currentStatus) => {
     setLoading(true);
     setError('');
+
+    // Prevent admin from deactivating themselves
+    // Compare IDs as strings to handle both ObjectId and string formats
+    const currentUserId = currentUser?._id?.toString();
+    const targetUserId = userId?.toString();
+    
+    // Find the user being toggled to check phone number as well
+    const targetUser = users.find(u => u._id?.toString() === targetUserId);
+    
+    // Check by ID
+    if (currentUser && currentUserId === targetUserId && currentStatus === true) {
+      setError('You cannot deactivate your own account. Please ask another admin to deactivate your account if needed.');
+      setLoading(false);
+      return;
+    }
+    
+    // Also check by phone number as backup protection
+    if (currentUser && targetUser && targetUser.phoneNumber === currentUser.phoneNumber && currentStatus === true) {
+      setError('You cannot deactivate your own account. Please ask another admin to deactivate your account if needed.');
+      setLoading(false);
+      return;
+    }
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/admin/users/${userId}`, {
@@ -364,11 +439,8 @@ export default function Settings() {
   };
 
   const handleResendOTP = async () => {
-    if (otpModal.userData && otpModal.currentAdminName) {
-      const currentAdmin = users.find(user => user.role === 'admin');
-      if (currentAdmin) {
-        await sendOTPToCurrentAdmin(currentAdmin, otpModal.userData, otpModal.type);
-      }
+    if (otpModal.userData && otpModal.currentAdminName && currentUser) {
+      await sendOTPToCurrentAdmin(currentUser, otpModal.userData, otpModal.type);
     }
   };
 
@@ -379,41 +451,78 @@ export default function Settings() {
   };
 
   const handleAddSubadmin = async (subadminData) => {
-    // Find the current admin user
-    const currentAdmin = users.find(user => user.role === 'admin');
-    if (!currentAdmin) {
-      setError('Admin user not found');
+    // Get the currently logged-in admin
+    if (!currentUser) {
+      setError('Please login again');
       return;
     }
 
+    // Remove confirmPassword before storing in pending action
+    const { confirmPassword, ...cleanSubadminData } = subadminData;
+
     const newSubadminData = {
-      ...subadminData,
+      ...cleanSubadminData,
       role: 'subadmin',
       permissions: ['dashboard', 'cities', 'builders', 'properties']
     };
     
-    // Send OTP to current admin's phone, not new subadmin's phone
-    await sendOTPToCurrentAdmin(currentAdmin, newSubadminData, 'create');
+    console.log('Adding subadmin with data:', newSubadminData); // Debug log
+    
+    // Send OTP to current logged-in admin's phone, not new subadmin's phone
+    await sendOTPToCurrentAdmin(currentUser, newSubadminData, 'create');
   };
 
-  const handleUpdateAdmin = async (newAdminData) => {
-    // Find the current admin user
-    const currentAdmin = users.find(user => user.role === 'admin');
-    if (!currentAdmin) {
-      setError('Admin user not found');
+  const handleAddAdmin = async (adminData) => {
+    // Get the currently logged-in admin for OTP verification
+    if (!currentUser) {
+      setError('Please login again');
       return;
     }
 
-    const updatedAdminData = {
-      ...currentAdmin,
-      ...newAdminData,
+    // Remove confirmPassword before storing in pending action
+    const { confirmPassword, ...cleanAdminData } = adminData;
+
+    const newAdminData = {
+      ...cleanAdminData,
       role: 'admin',
       permissions: ['all']
     };
     
-    // Send OTP to current admin's phone, not new admin's phone
-    await sendOTPToCurrentAdmin(currentAdmin, updatedAdminData, 'edit');
+    console.log('Adding new admin with data:', newAdminData); // Debug log
+    
+    // Send OTP to current logged-in admin's phone for verification
+    await sendOTPToCurrentAdmin(currentUser, newAdminData, 'create');
   };
+
+  const handleChangePassword = async (passwordData) => {
+    try {
+      setLoading(true);
+      setError('');
+
+      const response = await fetch(`${API_BASE_URL}/api/admin/change-password`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(passwordData)
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSuccess('Password changed successfully!');
+        setShowChangePasswordModal(false);
+      } else {
+        setError(data.error || 'Failed to change password');
+      }
+    } catch (error) {
+      setError('Failed to change password: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   const sendOTPToCurrentAdmin = async (currentAdmin, userData, type) => {
     try {
@@ -452,7 +561,6 @@ export default function Settings() {
           currentAdminPhone: currentAdmin.phoneNumber
         });
         setOtpCode('');
-        setShowChangeAdminModal(false);
         setShowAddSubadminModal(false);
       } else {
         setOtpError(data.error || 'Failed to send OTP');
@@ -467,14 +575,15 @@ export default function Settings() {
   };
 
   return (
-    <div className="d-flex">
-      <Sidebar isSidebarOpen={isSidebarOpen} toggleSidebar={toggleSidebar} />
+    <ProtectedRoute>
+      <div className="d-flex">
+        <Sidebar isSidebarOpen={isSidebarOpen} toggleSidebar={toggleSidebar} />
       <div className="flex-grow-1">
         <Header toggleSidebar={toggleSidebar} handleSignOut={handleSignOut} />
         
         <div className="container pt-5 mt-5 p-4">
           <div className="d-flex justify-content-between align-items-center mb-4">
-            <h2 className='fw-bold'>User Management</h2>
+            <h2 className='fw-bold'>Settings</h2>
             
           </div>
 
@@ -539,13 +648,13 @@ export default function Settings() {
             <div className="col-12">
               <div className="card">
                 <div className="card-body">
-                  <div className="d-flex justify-content-center gap-3">
+                  <div className="d-flex justify-content-center gap-3 flex-wrap">
                     <button 
-                      className="btn btn-danger btn-lg px-4"
-                      onClick={() => setShowChangeAdminModal(true)}
+                      className="btn btn-success btn-lg px-4"
+                      onClick={() => setShowAddAdminModal(true)}
                     >
-                      <i className="bi bi-person-gear me-2"></i>
-                      Update Admin
+                      <i className="bi bi-person-plus-fill me-2"></i>
+                      Add Admin
                     </button>
                     <button 
                       className="btn btn-warning btn-lg px-4"
@@ -553,6 +662,13 @@ export default function Settings() {
                     >
                       <i className="bi bi-person-plus me-2"></i>
                       Add Subadmin
+                    </button>
+                    <button 
+                      className="btn btn-primary btn-lg px-4"
+                      onClick={() => setShowChangePasswordModal(true)}
+                    >
+                      <i className="bi bi-key me-2"></i>
+                      Change Password
                     </button>
                   </div>
                 </div>
@@ -577,15 +693,18 @@ export default function Settings() {
             </div>
           )}
 
-          {/* Subadmin Users Table */}
-          <div className="card">
-            <div className="card-header">
-              <h5 className="mb-0">Subadmin Users</h5>
+          {/* Admin Users Table */}
+          <div className="card mb-4">
+            <div className="card-header bg-danger text-white">
+              <h5 className="mb-0">
+                <i className="bi bi-shield-fill-check me-2"></i>
+                Admin Users
+              </h5>
             </div>
             <div className="card-body">
               {loading ? (
                 <div className="text-center py-4">
-                  <div className="spinner-border" role="status">
+                  <div className="spinner-border text-danger" role="status">
                     <span className="visually-hidden">Loading...</span>
                   </div>
                 </div>
@@ -596,7 +715,126 @@ export default function Settings() {
                       <tr>
                         <th>Name</th>
                         <th>Phone</th>
-                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Last Login</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {users.filter(user => user.role === 'admin').length === 0 ? (
+                        <tr>
+                          <td colSpan="6" className="text-center py-4 text-muted">
+                            <i className="bi bi-shield-exclamation fs-1 d-block mb-2"></i>
+                            <p className="mb-0">No admin users found.</p>
+                          </td>
+                        </tr>
+                      ) : (
+                        users.filter(user => user.role === 'admin').map((user) => (
+                          <tr key={user._id}>
+                            <td>
+                              <div className="d-flex align-items-center">
+                                <strong>{user.name}</strong>
+                                {(() => {
+                                  const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
+                                  if (protectedPhones.includes(user.phoneNumber)) {
+                                    return (
+                                      <span className="badge bg-primary ms-2">
+                                        <i className="bi bi-star-fill me-1"></i>
+                                        Super Admin
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                              </div>
+                            </td>
+                            <td>
+                              <i className="bi bi-telephone me-1"></i>
+                              {user.phoneNumber}
+                            </td>
+                            <td>
+                              <span className={`badge ${getStatusBadge(user.isActive)}`}>
+                                <i className={`bi ${user.isActive ? 'bi-check-circle' : 'bi-x-circle'} me-1`}></i>
+                                {user.isActive ? 'Active' : 'Inactive'}
+                              </span>
+                            </td>
+                            <td>
+                              {user.lastLogin 
+                                ? new Date(user.lastLogin).toLocaleDateString() + ' ' + new Date(user.lastLogin).toLocaleTimeString()
+                                : 'Never'
+                              }
+                            </td>
+                            <td>
+                              {new Date(user.createdAt).toLocaleDateString()}
+                            </td>
+                            <td>
+                              {(() => {
+                                // Protected super admin phone numbers
+                                const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
+                                const isProtected = protectedPhones.includes(user.phoneNumber);
+                                const isCurrentUser = currentUser && (user._id?.toString() === currentUser._id?.toString() || user.phoneNumber === currentUser.phoneNumber);
+                                
+                                if (isProtected) {
+                                  return (
+                                    <span className="badge bg-secondary">
+                                      <i className="bi bi-shield-lock me-1"></i>
+                                      Protected
+                                    </span>
+                                  );
+                                } else if (isCurrentUser) {
+                                  return (
+                                    <span className="badge bg-info">
+                                      <i className="bi bi-person-check me-1"></i>
+                                      You (Cannot deactivate)
+                                    </span>
+                                  );
+                                } else {
+                                  return (
+                                    <button
+                                      className="btn btn-sm btn-outline-primary"
+                                      onClick={() => toggleUserStatus(user._id, user.isActive)}
+                                      title={user.isActive ? 'Deactivate Admin' : 'Activate Admin'}
+                                    >
+                                      <i className={`bi ${user.isActive ? 'bi-pause-circle' : 'bi-play-circle'} me-1`}></i>
+                                      {user.isActive ? 'Deactivate' : 'Activate'}
+                                    </button>
+                                  );
+                                }
+                              })()}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Subadmin Users Table */}
+          <div className="card">
+            <div className="card-header bg-warning text-dark">
+              <h5 className="mb-0">
+                <i className="bi bi-people me-2"></i>
+                Subadmin Users
+              </h5>
+            </div>
+            <div className="card-body">
+              {loading ? (
+                <div className="text-center py-4">
+                  <div className="spinner-border text-warning" role="status">
+                    <span className="visually-hidden">Loading...</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="table-responsive">
+                  <table className="table table-hover">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Phone</th>
                         <th>Status</th>
                         <th>Last Login</th>
                         <th>Created</th>
@@ -606,7 +844,7 @@ export default function Settings() {
                     <tbody>
                       {users.filter(user => user.role === 'subadmin').length === 0 ? (
                         <tr>
-                          <td colSpan="7" className="text-center py-4 text-muted">
+                          <td colSpan="6" className="text-center py-4 text-muted">
                             <i className="bi bi-people fs-1 d-block mb-2"></i>
                             <p className="mb-0">No subadmins found. Click "Add Subadmin" to create one.</p>
                           </td>
@@ -615,15 +853,9 @@ export default function Settings() {
                         users.filter(user => user.role === 'subadmin').map((user) => (
                           <tr key={user._id}>
                             <td>
-                              <div className="d-flex align-items-center">
-                                <div className="avatar-sm bg-warning text-white rounded-circle d-flex align-items-center justify-content-center me-2">
-                                  {user.name.charAt(0).toUpperCase()}
-                                </div>
-                                {user.name}
-                              </div>
+                              {user.name}
                             </td>
                             <td>{user.phoneNumber}</td>
-                            <td>{user.email || 'N/A'}</td>
                             <td>
                               <span className={`badge ${getStatusBadge(user.isActive)}`}>
                                 {user.isActive ? 'Active' : 'Inactive'}
@@ -639,14 +871,39 @@ export default function Settings() {
                               {new Date(user.createdAt).toLocaleDateString()}
                             </td>
                             <td>
-                              <button
-                                className="btn btn-sm btn-outline-danger"
-                                onClick={() => handleDeleteUser(user._id)}
-                                title="Remove Subadmin"
-                              >
-                                <i className="bi bi-trash me-1"></i>
-                                Remove
-                              </button>
+                              {(() => {
+                                // Protected super admin phone numbers
+                                const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
+                                const isProtected = protectedPhones.includes(user.phoneNumber);
+                                const isCurrentUser = currentUser && (user._id?.toString() === currentUser._id?.toString() || user.phoneNumber === currentUser.phoneNumber);
+                                
+                                if (isProtected) {
+                                  return (
+                                    <span className="badge bg-secondary">
+                                      <i className="bi bi-shield-lock me-1"></i>
+                                      Protected
+                                    </span>
+                                  );
+                                } else if (isCurrentUser) {
+                                  return (
+                                    <span className="badge bg-info">
+                                      <i className="bi bi-person-circle me-1"></i>
+                                      You (Can't Delete Self)
+                                    </span>
+                                  );
+                                } else {
+                                  return (
+                                    <button
+                                      className="btn btn-sm btn-outline-danger"
+                                      onClick={() => handleDeleteUser(user._id)}
+                                      title="Delete Subadmin"
+                                    >
+                                      <i className="bi bi-trash me-1"></i>
+                                      Delete
+                                    </button>
+                                  );
+                                }
+                              })()}
                             </td>
                           </tr>
                         ))
@@ -897,17 +1154,6 @@ export default function Settings() {
         </div>
       )}
 
-      {/* Change Admin Modal */}
-      {showChangeAdminModal && (
-        <ChangeAdmin
-          currentAdmin={users.find(user => user.role === 'admin')}
-          onClose={() => setShowChangeAdminModal(false)}
-          onUpdateAdmin={handleUpdateAdmin}
-          error={error}
-          setError={setError}
-        />
-      )}
-
       {/* Add Subadmin Modal */}
       {showAddSubadminModal && (
         <AddSubadmin
@@ -915,8 +1161,32 @@ export default function Settings() {
           onAddSubadmin={handleAddSubadmin}
           error={error}
           setError={setError}
+          currentAdmin={currentUser}
         />
       )}
-    </div>
+
+      {/* Add Admin Modal */}
+      {showAddAdminModal && (
+        <AddAdmin
+          onClose={() => setShowAddAdminModal(false)}
+          onAddAdmin={handleAddAdmin}
+          error={error}
+          setError={setError}
+        />
+      )}
+
+      {/* Change Password Modal */}
+      {showChangePasswordModal && (
+        <ChangePassword
+          user={currentUser}
+          onClose={() => setShowChangePasswordModal(false)}
+          onChangePassword={handleChangePassword}
+          error={error}
+          setError={setError}
+        />
+      )}
+
+      </div>
+    </ProtectedRoute>
   );
 }

@@ -26,6 +26,9 @@ import authRoutes from "./routes/authRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
 import propertyViewRoutes from "./routes/propertyViewRoutes.js";
 import activityLogRoutes from "./routes/activityLogRoutes.js";
+import homeVideoRoutes from "./routes/homeVideoRoutes.js";
+import videoLogRoutes from "./routes/videoLogRoutes.js";
+import forgotPasswordRoutes from "./routes/forgotPasswordRoutes.js";
 import { securityConfig, validateRequest } from "./middleware/security.js";
 import logger from "./utils/logger.js";
 import { validateRequiredEnv } from "./config/validateEnv.js";
@@ -146,6 +149,12 @@ app.use(securityConfig.rateLimits.general);
 app.use('/uploads', express.static('uploads'));
 
 // Routes
+// PUBLIC ROUTES (NO AUTHENTICATION REQUIRED)
+app.use("/api/forgot-password", forgotPasswordRoutes); // Public - must be BEFORE /api/admin
+app.use("/api/2factor", twoFactorAuthRoutes); // Public - for login OTP
+app.use("/api/auth", authRoutes); // Public - for authentication
+
+// PROTECTED ROUTES (AUTHENTICATION REQUIRED)
 app.use("/api/builders", builderRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/cities", cityRoutes);
@@ -153,12 +162,12 @@ app.use("/api/properties", propertyRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/leads", leadRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/2factor", twoFactorAuthRoutes);
-app.use("/api/auth", authRoutes);
+app.use("/api/admin", adminRoutes); // Protected - has authenticateJWT middleware
+app.use("/api/admin/logs", activityLogRoutes); // Protected
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/property-views", propertyViewRoutes);
-app.use("/api/admin/logs", activityLogRoutes);
+app.use("/api/home-video", homeVideoRoutes);
+app.use("/api/video-logs", videoLogRoutes);
 
 // Health check endpoint (for monitoring and load balancers)
 app.get("/health", (req, res) => {

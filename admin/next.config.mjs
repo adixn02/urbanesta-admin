@@ -1,19 +1,30 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Environment variables
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002',
   },
+
+  // Build configuration
   eslint: {
-    // Warning: This allows production builds to successfully complete even if
-    // your project has ESLint errors or warnings.
-    ignoreDuringBuilds: false, // Keep false to catch errors
+    ignoreDuringBuilds: false, // Catch errors during build
   },
   typescript: {
-    // !! WARN !!
-    // Dangerously allow production builds to successfully complete even if
-    // your project has type errors.
-    ignoreBuildErrors: false,
+    ignoreBuildErrors: false, // Catch type errors during build
   },
+
+  // Production optimizations
+  compress: true, // Enable gzip compression
+  poweredByHeader: false, // Remove X-Powered-By header for security
+  generateEtags: true, // Enable ETags for caching
+  
+  // React strict mode for catching issues
+  reactStrictMode: true,
+
+  // Optimize production build
+  swcMinify: true, // Use SWC for faster minification
+
+  // Image optimization
   images: {
     remotePatterns: [
       {
@@ -47,7 +58,55 @@ const nextConfig = {
         pathname: '/img-assets/**',
       },
     ],
+    deviceSizes: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
+    formats: ['image/webp'],
   },
+
+  // Headers for caching and security
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'X-DNS-Prefetch-Control',
+            value: 'on'
+          },
+          {
+            key: 'X-Frame-Options',
+            value: 'SAMEORIGIN'
+          },
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff'
+          },
+          {
+            key: 'Referrer-Policy',
+            value: 'origin-when-cross-origin'
+          },
+        ],
+      },
+      {
+        source: '/static/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
+          },
+        ],
+      },
+    ];
+  },
+
+  // Experimental features for better performance
+  experimental: {
+    optimizeCss: true,
+    optimizePackageImports: ['bootstrap', 'bootstrap-icons'],
+  },
+
+  // Output configuration
+  output: 'standalone', // Optimized for production deployment
 };
 
 export default nextConfig;

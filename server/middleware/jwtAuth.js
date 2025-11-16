@@ -84,10 +84,10 @@ export const generateToken = (user) => {
     isAdmin: user.isAdmin || false
   };
   
-  // Extended expiration for admin users to handle long forms
+  // Extended expiration for admin users to handle long forms and prevent frequent re-logins
   const expiresIn = (user.role === 'admin' || user.isAdmin) 
-    ? process.env.JWT_ADMIN_EXPIRES_IN || '4h'  // 4 hours for admins
-    : process.env.JWT_EXPIRES_IN || '30m';     // 30 minutes for regular users
+    ? process.env.JWT_ADMIN_EXPIRES_IN || '12h'  // 12 hours for admins (prevents reload issues)
+    : process.env.JWT_EXPIRES_IN || '2h';        // 2 hours for regular users
   
   return jwt.sign(payload, process.env.JWT_SECRET, {
     expiresIn

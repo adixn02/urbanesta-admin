@@ -63,8 +63,10 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
         typeof point === 'string' ? { text: point } : (point?.text !== undefined ? point : { text: '' })
       );
     })(),
-    images: getArrayValue('images', []),
-    projectImages: getArrayValue('projectImages', []),
+    // Load images based on property type
+    // Both types save to projectImages, but regular displays in images field
+    images: property?.type === 'regular' ? getArrayValue('projectImages', []) : getArrayValue('images', []),
+    projectImages: property?.type === 'builder' ? getArrayValue('projectImages', []) : [],
     
     // Builder specific fields
     projectName: getPropertyValue('projectName', ''),
@@ -180,8 +182,10 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
             typeof point === 'string' ? { text: point } : (point?.text !== undefined ? point : { text: '' })
           );
         })(),
-        images: getArrayValue('images', []),
-        projectImages: getArrayValue('projectImages', []),
+        // Load images based on property type
+        // Both types save to projectImages, but regular displays in images field
+        images: property.type === 'regular' ? getArrayValue('projectImages', []) : getArrayValue('images', []),
+        projectImages: property.type === 'builder' ? getArrayValue('projectImages', []) : [],
         
         // Builder specific fields
         projectName: getPropertyValue('projectName', ''),
@@ -1052,8 +1056,10 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
         highlights: formData.highlights ? formData.highlights.filter(h => h?.trim() !== '') : [],
         connectivityPoints: processedConnectivityPoints || [],
         // Set images based on property type
+        // Both regular and builder properties use projectImages array
+        projectImages: formType === 'builder' ? (projectImageUrls || []) : (regularImageUrls || []),
+        images: [], // Keep images array empty for both types
         ...(formType === 'builder' ? {
-          projectImages: projectImageUrls || [], // Replace file objects with S3 URLs
         // Replace single image file objects with S3 URLs for builder properties
           projectLogo: projectLogoUrl || '',
           wallpaperImage: wallpaperImageUrl || '',
@@ -1062,9 +1068,7 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
           floorPlan: floorPlanUrl || '',
           masterPlan: masterPlanUrl || '',
           unitDetails: processedUnitDetails || [], // Use processed unit details with uploaded floor plan URLs
-        } : {
-          images: regularImageUrls || [], // Regular property images
-        }),
+        } : {}),
         // Include new fields
         amenities: formData.amenities || [],
         constructionDetails: formData.constructionDetails || {

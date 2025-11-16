@@ -10,6 +10,10 @@
 
 ---
 
+sudo rm -rf /etc/nginx/sites-available/nginx-admin-panel.conf
+ sudo rm -rf /etc/nginx/sites-enabled/nginx-admin-panel.conf
+cd ur-admin
+
 ## Step 1: Install Certbot
 
 ```bash
@@ -33,17 +37,14 @@ dig admin.urbanesta.in +short
 # (Use SCP from your local machine or create it on server)
 
 # On your server, create the config file:
-sudo nano /etc/nginx/sites-available/urbanesta-admin-panel
+sudo cp nginx-admin-panel.conf  /etc/nginx/sites-available/nginx-admin-panel.conf
 ```
 
 **Paste the entire content from `nginx-admin-panel.conf`**
 
 ```bash
 # Enable the site
-sudo ln -s /etc/nginx/sites-available/urbanesta-admin-panel /etc/nginx/sites-enabled/
-
-# Remove default config if exists
-sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -s /etc/nginx/sites-available/nginx-admin-panel.conf /etc/nginx/sites-enabled/
 
 # Test configuration
 sudo nginx -t

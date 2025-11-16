@@ -6,6 +6,7 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import { fetchAnalytics } from '@/lib/analytics';
 import { API_BASE_URL } from '@/lib/config';
 import { useAuth } from '@/hooks/useAuth';
+import AddVideo from '@/components/addvideo';
 
 export default function Admin() {
   const { user } = useAuth();
@@ -24,39 +25,142 @@ export default function Admin() {
     properties: { total: 0, regular: 0, builder: 0 }
   });
   const [error, setError] = useState(null);
+  const [showAddVideoModal, setShowAddVideoModal] = useState(false);
+  const [currentVideo, setCurrentVideo] = useState(null);
+  const [success, setSuccess] = useState('');
+
+  // Prevent caching of this page for security
+  useEffect(() => {
+    // Disable browser back/forward cache
+    window.onpageshow = function(event) {
+      if (event.persisted) {
+        // Page was loaded from cache (back button)
+        // Check authentication again
+        const token = localStorage.getItem('token');
+        if (!token) {
+          window.location.replace('/');
+        }
+      }
+    };
+
+    return () => {
+      window.onpageshow = null;
+    };
+  }, []);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
 
   const handleSignOut = async () => {
     try {
-      // Import logout function dynamically to avoid SSR issues
-      const { logout: apiLogout } = await import('@/lib/logout');
-      await apiLogout();
-      // Redirect to login page
-      window.location.href = '/';
-    } catch (error) {
-      console.error('Error during logout:', error);
-      // Fallback: clear storage and redirect
+      // Immediately clear all auth data FIRST
       localStorage.clear();
       document.cookie = 'urbanesta_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
       document.cookie = 'urbanesta_refresh_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-      window.location.href = '/';
+      sessionStorage.clear();
+      
+      // Then call API to log the logout (in background, don't wait)
+      try {
+        const { logout: apiLogout } = await import('@/lib/logout');
+        apiLogout().catch(() => {}); // Fire and forget
+      } catch (e) {
+        // Ignore API errors during logout
+      }
+      
+      // Force redirect with replace to prevent back navigation
+      window.location.replace('/');
+    } catch (error) {
+      console.error('Error during logout:', error);
+      // Force redirect even on error
+      window.location.replace('/');
+    }
+  };
+
+  const fetchCurrentVideo = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/home-video/current`);
+      const data = await response.json();
+      
+      if (data.success && data.video) {
+        setCurrentVideo(data.video);
+      }
+    } catch (error) {
+      console.error('Failed to fetch current video:', error);
+    }
+  };
+
+  const handleUploadVideo = async (file, setUploading, setUploadProgress) => {
+    try {
+      setUploading(true);
+      setError('');
+      setUploadProgress(0);
+
+      const formData = new FormData();
+      formData.append('video', file);
+
+      const xhr = new XMLHttpRequest();
+
+      // Track upload progress
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const percentComplete = Math.round((e.loaded / e.total) * 100);
+          setUploadProgress(percentComplete);
+        }
+      });
+
+      // Handle completion
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+          const data = JSON.parse(xhr.responseText);
+          if (data.success) {
+            setSuccess('Video uploaded successfully!');
+            setShowAddVideoModal(false);
+            fetchCurrentVideo(); // Refresh video data
+          } else {
+            setError(data.error || 'Failed to upload video');
+          }
+        } else {
+          setError('Failed to upload video. Please try again.');
+        }
+        setUploading(false);
+      });
+
+      // Handle errors
+      xhr.addEventListener('error', () => {
+        setError('Network error. Please check your connection and try again.');
+        setUploading(false);
+      });
+
+      // Send request
+      xhr.open('POST', `${API_BASE_URL}/api/home-video/upload`);
+      xhr.setRequestHeader('Authorization', `Bearer ${localStorage.getItem('token')}`);
+      xhr.send(formData);
+    } catch (error) {
+      setError('Failed to upload video: ' + error.message);
+      setUploading(false);
     }
   };
 
   // API_BASE_URL is imported from config, which uses NEXT_PUBLIC_API_URL env variable
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    // Only fetch data if user is authenticated
+    if (user) {
+      fetchDashboardData();
+      fetchCurrentVideo();
+    }
+  }, [user]); // Re-fetch when user changes
 
   const fetchDashboardData = async () => {
     try {
+      // Double-check authentication before fetching
+      const token = localStorage.getItem('token');
+      if (!token || !user) {
+        console.warn('No token or user found, skipping dashboard data fetch');
+        return;
+      }
+
       setLoading(true);
       setError(null);
-
-      // Get authentication token
-      const token = localStorage.getItem('token');
       
       // Fetch analytics data (with error handling)
       let totalViews = 0;
@@ -242,13 +346,22 @@ export default function Admin() {
           <main className="p-4 pt-5 mt-5">
         <div className="d-flex justify-content-between align-items-center mb-4">
           <h2 className='fw-bold'>Welcome to Proprty Management System</h2>
-          <button 
-            className="btn btn-outline-primary btn-sm" 
-            onClick={fetchDashboardData}
-            disabled={loading}
-          >
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </button>
+          <div className="d-flex gap-2">
+            <button 
+              className="btn btn-info btn-sm text-white"
+              onClick={() => setShowAddVideoModal(true)}
+            >
+              <i className="bi bi-camera-video-fill me-2"></i>
+              {currentVideo ? 'Update Home Video' : 'Add Home Video'}
+            </button>
+            <button 
+              className="btn btn-outline-primary btn-sm" 
+              onClick={fetchDashboardData}
+              disabled={loading}
+            >
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -258,6 +371,17 @@ export default function Admin() {
               type="button" 
               className="btn-close" 
               onClick={() => setError(null)}
+            ></button>
+          </div>
+        )}
+
+        {success && (
+          <div className="alert alert-success alert-dismissible fade show" role="alert">
+            <strong>Success!</strong> {success}
+            <button 
+              type="button" 
+              className="btn-close" 
+              onClick={() => setSuccess('')}
             ></button>
           </div>
         )}
@@ -390,6 +514,17 @@ export default function Admin() {
           </main>
         </div>
       </div>
+
+      {/* Add/Update Video Modal */}
+      {showAddVideoModal && (
+        <AddVideo
+          onClose={() => setShowAddVideoModal(false)}
+          onUploadVideo={handleUploadVideo}
+          currentVideo={currentVideo}
+          error={error}
+          setError={setError}
+        />
+      )}
     </ProtectedRoute>
   );
 }

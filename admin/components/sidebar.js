@@ -30,7 +30,7 @@ export default function Sidebar({isSidebarOpen, toggleSidebar}) {
             { icon: "bi-people", label: "Users", path:"/users", roles: ["admin"] },
             { icon: "bi-telephone", label: "Leads", path:"/leads", roles: ["admin"] },
             { icon: "bi-gear", label: "Settings", path:"/settings", roles: ["admin"] },
-            { icon: "bi-file-text", label: "Logs", path:"/logs", roles: ["admin"] },
+            { icon: "bi-file-text", label: "Insights", path:"/insights", roles: ["admin"] },
           ].filter(item => {
             // If no roles specified, show to all users
             if (!item.roles) return true;

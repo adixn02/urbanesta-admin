@@ -25,7 +25,8 @@
     "pm2:startup": "pm2 startup",
     "deploy": "cp env.production .env && pm2 restart urbanesta-admin-api",
     "health": "curl -f http://localhost:3002/health || exit 1",
-    "seed:admin": "node seedadmin.js"
+    "seed:admin": "node seedadmin.js",
+    "set-default-passwords": "node setDefaultPasswords.js"
   },
   "keywords": [],
   "author": "",
@@ -37,6 +38,8 @@
     "@dr.pogodin/csurf": "^1.16.6",
     "@vickos/multer-s3-transforms-v3": "^3.0.1",
     "axios": "^1.13.1",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
     "compression": "^1.7.4",
     "cookie": "^1.0.2",
     "cors": "^2.8.5",
