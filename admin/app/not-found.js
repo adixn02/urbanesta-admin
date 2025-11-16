@@ -64,7 +64,7 @@ export default function NotFound() {
                 </h5>
                 <p className="text-muted mb-3" style={{ fontSize: '0.9rem' }}>
                   <i className="bi bi-info-circle me-1"></i>
-                  The page you're looking for doesn't exist or has been moved.
+                  The page you&apos;re looking for doesn&apos;t exist or has been moved.
                 </p>
 
                 {/* Security Notice */}
@@ -78,7 +78,7 @@ export default function NotFound() {
                   <div className="text-start">
                     <strong>Access Restricted:</strong> This admin panel requires proper authentication.
                     <br />
-                    <small style={{ fontSize: '0.8rem' }}>If you're trying to access unauthorized pages, your activity may be logged.</small>
+                    <small style={{ fontSize: '0.8rem' }}>If you&apos;re trying to access unauthorized pages, your activity may be logged.</small>
                   </div>
                 </div>
 

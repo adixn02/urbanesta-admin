@@ -201,7 +201,7 @@ export default function AddVideo({ onClose, onUploadVideo, error, setError, curr
 
               <div className="alert alert-warning border-warning">
                 <i className="bi bi-exclamation-triangle me-2"></i>
-                <strong>Important:</strong> This video will be displayed on the website home screen. Make sure it's appropriate and high quality.
+                <strong>Important:</strong> This video will be displayed on the website home screen. Make sure it&apos;s appropriate and high quality.
               </div>
             </div>
 
