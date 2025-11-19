@@ -64,7 +64,7 @@ const leadSchema = new mongoose.Schema(
     },
     propertyInterest: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Property'
+      ref: 'Managedproperty'
     },
     notes: [{
       note: String,

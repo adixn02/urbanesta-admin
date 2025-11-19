@@ -5,6 +5,7 @@ import MultipleFilePreview from './multipleFilePreview';
 import { ButtonSpinner } from './LoadingSpinner';
 import UploadProgress from './UploadProgress';
 import ErrorPopup from './ErrorPopup';
+import logger from '@/lib/logger';
 
 export default function AddPropertyForm({ property, onSave, isLoading = false, dropdownData = { categories: [], cities: [], builders: [] }, onSaveSuccess, onSaveError }) {
   const isEditing = !!property?._id || !!property?.id;
@@ -951,22 +952,64 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
         const uploadPromises = [];
         
         if (formData.projectLogo && formData.projectLogo instanceof File) {
-          uploadPromises.push(uploadSingleFileToS3(formData.projectLogo).then(url => ({ field: 'projectLogo', url })));
+          uploadPromises.push(
+            uploadSingleFileToS3(formData.projectLogo)
+              .then(url => ({ field: 'projectLogo', url }))
+              .catch(error => {
+                logger.error('Failed to upload projectLogo:', { error: error.message });
+                throw new Error(`Failed to upload project logo: ${error.message}`);
+              })
+          );
         }
         if (formData.wallpaperImage && formData.wallpaperImage instanceof File) {
-          uploadPromises.push(uploadSingleFileToS3(formData.wallpaperImage).then(url => ({ field: 'wallpaperImage', url })));
+          uploadPromises.push(
+            uploadSingleFileToS3(formData.wallpaperImage)
+              .then(url => ({ field: 'wallpaperImage', url }))
+              .catch(error => {
+                logger.error('Failed to upload wallpaperImage:', { error: error.message });
+                throw new Error(`Failed to upload wallpaper image: ${error.message}`);
+              })
+          );
         }
         if (formData.descriptionImage && formData.descriptionImage instanceof File) {
-          uploadPromises.push(uploadSingleFileToS3(formData.descriptionImage).then(url => ({ field: 'descriptionImage', url })));
+          uploadPromises.push(
+            uploadSingleFileToS3(formData.descriptionImage)
+              .then(url => ({ field: 'descriptionImage', url }))
+              .catch(error => {
+                logger.error('Failed to upload descriptionImage:', { error: error.message });
+                throw new Error(`Failed to upload description image: ${error.message}`);
+              })
+          );
         }
         if (formData.highlightImage && formData.highlightImage instanceof File) {
-          uploadPromises.push(uploadSingleFileToS3(formData.highlightImage).then(url => ({ field: 'highlightImage', url })));
+          uploadPromises.push(
+            uploadSingleFileToS3(formData.highlightImage)
+              .then(url => ({ field: 'highlightImage', url }))
+              .catch(error => {
+                logger.error('Failed to upload highlightImage:', { error: error.message });
+                throw new Error(`Failed to upload highlight image: ${error.message}`);
+              })
+          );
         }
         if (formData.floorPlan && formData.floorPlan instanceof File) {
-          uploadPromises.push(uploadSingleFileToS3(formData.floorPlan).then(url => ({ field: 'floorPlan', url })));
+          uploadPromises.push(
+            uploadSingleFileToS3(formData.floorPlan)
+              .then(url => ({ field: 'floorPlan', url }))
+              .catch(error => {
+                logger.error('Failed to upload floorPlan:', { error: error.message });
+                throw new Error(`Failed to upload floor plan: ${error.message}`);
+              })
+          );
         }
         if (formData.masterPlan && formData.masterPlan instanceof File) {
-          uploadPromises.push(uploadSingleFileToS3(formData.masterPlan).then(url => ({ field: 'masterPlan', url })));
+          uploadPromises.push(
+            uploadSingleFileToS3(formData.masterPlan)
+              .then(url => ({ field: 'masterPlan', url }))
+              .catch(error => {
+                logger.error('Failed to upload masterPlan:', { error: error.message });
+                throw new Error(`Failed to upload master plan: ${error.message}`);
+              })
+          );
         }
 
         if (uploadPromises.length > 0) {

@@ -7,11 +7,15 @@ import { fetchAnalytics } from '@/lib/analytics';
 import { API_BASE_URL } from '@/lib/config';
 import { useAuth } from '@/hooks/useAuth';
 import AddVideo from '@/components/addvideo';
+import logger from '@/lib/logger';
 
 export default function Admin() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false); // Prevent multiple simultaneous requests
+  const [hasInitialFetch, setHasInitialFetch] = useState(false); // Track initial fetch to prevent loops
+  const [lastFetchTime, setLastFetchTime] = useState(0); // Track last fetch time to prevent rate limiting
   const [stats, setStats] = useState({
     totalViews: 0,
     totalUsers: 0,
@@ -69,7 +73,7 @@ export default function Admin() {
       // Force redirect with replace to prevent back navigation
       window.location.replace('/');
     } catch (error) {
-      console.error('Error during logout:', error);
+      logger.error('Error during logout:', { error: error.message });
       // Force redirect even on error
       window.location.replace('/');
     }
@@ -84,7 +88,7 @@ export default function Admin() {
         setCurrentVideo(data.video);
       }
     } catch (error) {
-      console.error('Failed to fetch current video:', error);
+      logger.error('Failed to fetch current video:', { error: error.message });
     }
   };
 
@@ -143,31 +147,83 @@ export default function Admin() {
   // API_BASE_URL is imported from config, which uses NEXT_PUBLIC_API_URL env variable
 
   useEffect(() => {
-    // Only fetch data if user is authenticated
-    if (user) {
-      fetchDashboardData();
-      fetchCurrentVideo();
+    // Only fetch data once when user is authenticated and auth is ready
+    // Prevent refresh loops by checking hasInitialFetch
+    if (user && !authLoading && !isFetching && !hasInitialFetch) {
+      // Increased delay to prevent rapid successive calls and rate limiting
+      const timer = setTimeout(() => {
+        fetchDashboardData();
+        fetchCurrentVideo();
+        setHasInitialFetch(true); // Mark as fetched
+        setLastFetchTime(Date.now()); // Record fetch time
+      }, 500);
+      return () => clearTimeout(timer);
     }
-  }, [user]); // Re-fetch when user changes
+  }, [user, authLoading]); // Only depend on user and authLoading, not isFetching
 
-  const fetchDashboardData = async () => {
+  // Refetch data when component becomes visible (e.g., after navigating back)
+  // But only if initial fetch was done and enough time has passed (prevent rate limiting)
+  useEffect(() => {
+    let visibilityTimer;
+    
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && user && hasInitialFetch) {
+        // Prevent refetch if less than 5 seconds have passed (rate limit protection)
+        const timeSinceLastFetch = Date.now() - lastFetchTime;
+        if (timeSinceLastFetch < 5000) {
+          return; // Too soon, skip refetch
+        }
+        
+        // Clear any existing timer
+        if (visibilityTimer) clearTimeout(visibilityTimer);
+        
+        // Debounce visibility change to prevent rapid refetches
+        visibilityTimer = setTimeout(() => {
+          // Only refetch if not already fetching
+          if (!isFetching) {
+            fetchDashboardData();
+            setLastFetchTime(Date.now()); // Update last fetch time
+          }
+        }, 2000); // Wait 2 seconds after becoming visible
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (visibilityTimer) clearTimeout(visibilityTimer);
+    };
+  }, [user, hasInitialFetch, lastFetchTime]); // Include lastFetchTime but not isFetching
+
+  const fetchDashboardData = async (retryCount = 0) => {
+    // Prevent multiple simultaneous requests
+    if (isFetching) {
+      logger.debug('Dashboard data fetch already in progress, skipping...');
+      return;
+    }
+
     try {
       // Double-check authentication before fetching
       const token = localStorage.getItem('token');
       if (!token || !user) {
-        console.warn('No token or user found, skipping dashboard data fetch');
+        logger.warn('No token or user found, skipping dashboard data fetch');
+        setError(null); // Clear any previous errors
         return;
       }
 
+      setIsFetching(true);
       setLoading(true);
-      setError(null);
+      setError(null); // Clear previous errors when starting fresh fetch
       
       // Fetch analytics data (with error handling)
+      // Analytics is non-critical, so we handle errors gracefully
       let totalViews = 0;
       try {
         totalViews = await fetchAnalytics();
       } catch (analyticsError) {
-        console.warn('Failed to fetch analytics:', analyticsError);
+        // Analytics errors (including rate limits) are non-critical
+        // fetchAnalytics already returns 0 on error, so this catch is just for safety
+        logger.warn('Analytics fetch failed (non-critical):', { error: analyticsError.message || analyticsError });
         // Continue with other data even if analytics fails
       }
       
@@ -187,13 +243,41 @@ export default function Admin() {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json'
             }
-          }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+          }).then(async res => {
+            if (res.status === 401 || res.status === 403) {
+              // Token expired or invalid - clear auth and redirect
+              localStorage.removeItem('token');
+              localStorage.removeItem('user');
+              window.location.replace('/');
+              return Promise.reject(new Error('Authentication expired'));
+            }
+            if (res.status === 429) {
+              // Rate limited - retry with exponential backoff
+              const retryAfter = res.headers.get('Retry-After') || 5;
+              throw new Error(`Rate limited. Retry after ${retryAfter} seconds`);
+            }
+            return res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`));
+          }),
           fetch(`${API_BASE_URL}/api/leads/stats`, {
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json'
             }
-          }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+          }).then(async res => {
+            if (res.status === 401 || res.status === 403) {
+              // Token expired or invalid - clear auth and redirect
+              localStorage.removeItem('token');
+              localStorage.removeItem('user');
+              window.location.replace('/');
+              return Promise.reject(new Error('Authentication expired'));
+            }
+            if (res.status === 429) {
+              // Rate limited - retry with exponential backoff
+              const retryAfter = res.headers.get('Retry-After') || 5;
+              throw new Error(`Rate limited. Retry after ${retryAfter} seconds`);
+            }
+            return res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`));
+          })
         );
       } else {
         // Subadmin - skip user and lead stats
@@ -210,19 +294,43 @@ export default function Admin() {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
-        }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+        }).then(res => {
+          if (res.status === 401 || res.status === 403) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            window.location.replace('/');
+            return Promise.reject(new Error('Authentication expired'));
+          }
+          return res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`));
+        }),
         fetch(`${API_BASE_URL}/api/cities/stats`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
-        }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+        }).then(res => {
+          if (res.status === 401 || res.status === 403) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            window.location.replace('/');
+            return Promise.reject(new Error('Authentication expired'));
+          }
+          return res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`));
+        }),
         fetch(`${API_BASE_URL}/api/builders/stats`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
-        }).then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+        }).then(res => {
+          if (res.status === 401 || res.status === 403) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            window.location.replace('/');
+            return Promise.reject(new Error('Authentication expired'));
+          }
+          return res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`));
+        })
       );
       
       const [userStatsResult, leadStatsResult, propertyStatsResult, cityStatsResult, builderStatsResult] = await Promise.allSettled(fetchPromises);
@@ -279,28 +387,55 @@ export default function Admin() {
       });
 
       // Show warning if some data failed to load, but don't throw error
-      // Don't include skipped requests (for subadmin)
+      // Only mark as failed if request was rejected (not if it was skipped for subadmin)
       const failedRequests = [
-        (userStatsResult.status === 'rejected' || (userStatsResult.value?.status === 'skipped' && isAdmin)) && 'Users',
-        (leadStatsResult.status === 'rejected' || (leadStatsResult.value?.status === 'skipped' && isAdmin)) && 'Leads',
+        (userStatsResult.status === 'rejected' || (isAdmin && userStatsResult.status === 'fulfilled' && userStatsResult.value?.success === false)) && 'Users',
+        (leadStatsResult.status === 'rejected' || (isAdmin && leadStatsResult.status === 'fulfilled' && leadStatsResult.value?.success === false)) && 'Leads',
         propertyStatsResult.status === 'rejected' && 'Properties',
         cityStatsResult.status === 'rejected' && 'Cities',
         builderStatsResult.status === 'rejected' && 'Builders'
       ].filter(Boolean);
 
       if (failedRequests.length > 0) {
-        console.warn('Some dashboard data failed to load:', failedRequests.join(', '));
+        logger.warn('Some dashboard data failed to load:', { failedRequests: failedRequests.join(', ') });
         // Only show error if ALL requests failed
         if (failedRequests.length === 5) {
           setError(`Failed to load dashboard data. Please check your permissions and try again.`);
         } else {
-          // Show a less severe warning
+          // Show a less severe warning that can be dismissed
           setError(`Some data may be incomplete. Failed to load: ${failedRequests.join(', ')}`);
         }
+      } else {
+        // Clear any previous errors if all requests succeeded
+        setError(null);
       }
     } catch (err) {
-      console.error('Error fetching dashboard data:', err);
-      setError(`Failed to load dashboard data: ${err.message}. Please check your connection and try again.`);
+      logger.error('Error fetching dashboard data:', { error: err.message, stack: err.stack });
+      
+      // Don't show error if it's an authentication issue (user will be redirected)
+      if (err.message && err.message.includes('Authentication expired')) {
+        // User will be redirected, don't set error
+        setIsFetching(false);
+        return;
+      }
+      
+      // Handle rate limiting with retry
+      if (err.message && err.message.includes('Rate limited')) {
+        const retryAfter = parseInt(err.message.match(/\d+/)?.[0]) || 5;
+        if (retryCount < 2) {
+          // Retry after the specified delay (max 2 retries)
+          logger.info(`Rate limited. Retrying after ${retryAfter} seconds...`);
+          setTimeout(() => {
+            fetchDashboardData(retryCount + 1);
+          }, retryAfter * 1000);
+          setIsFetching(false);
+          return;
+        } else {
+          setError(`Rate limit exceeded. Please wait a few moments and refresh the page.`);
+        }
+      } else {
+        setError(`Failed to load dashboard data: ${err.message}. Please check your connection and try again.`);
+      }
       
       // Set fallback data
       setStats({
@@ -317,6 +452,7 @@ export default function Admin() {
       });
     } finally {
       setLoading(false);
+      setIsFetching(false);
     }
   };
 
@@ -367,11 +503,25 @@ export default function Admin() {
         {error && (
           <div className={`alert ${error.includes('Some data may be incomplete') ? 'alert-info' : 'alert-warning'} alert-dismissible fade show`} role="alert">
             <strong>{error.includes('Some data may be incomplete') ? 'Info:' : 'Warning!'}</strong> {error}
-            <button 
-              type="button" 
-              className="btn-close" 
-              onClick={() => setError(null)}
-            ></button>
+            <div className="d-flex gap-2 mt-2">
+              <button 
+                className="btn btn-sm btn-outline-primary"
+                onClick={() => {
+                  setError(null);
+                  fetchDashboardData();
+                }}
+                disabled={loading}
+              >
+                <i className="bi bi-arrow-clockwise me-1"></i>
+                Retry
+              </button>
+              <button 
+                type="button" 
+                className="btn-close" 
+                onClick={() => setError(null)}
+                aria-label="Close"
+              ></button>
+            </div>
           </div>
         )}
 

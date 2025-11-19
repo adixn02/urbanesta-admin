@@ -1,11 +1,34 @@
 'use client'
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import logo from '../public/img/logo.jpg';
 import 'bootstrap-icons/font/bootstrap-icons.css';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function NotFound() {
+  const { user, loading: authLoading } = useAuth();
+  const router = useRouter();
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    // Check if user is authenticated
+    if (!authLoading) {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      const userData = typeof window !== 'undefined' ? localStorage.getItem('user') : null;
+      setIsAuthenticated(!!(token && userData && user));
+    }
+  }, [user, authLoading]);
+
+  const handleGoHome = () => {
+    if (isAuthenticated) {
+      router.push('/admin');
+    } else {
+      router.push('/');
+    }
+  };
+
   return (
     <div className="min-vh-100 d-flex align-items-center justify-content-center" style={{ 
       background: 'linear-gradient(135deg, #1a365d 0%, #2c5282 50%, #1a365d 100%)',
@@ -84,36 +107,24 @@ export default function NotFound() {
 
                 {/* Action Buttons */}
                 <div className="d-flex gap-2 justify-content-center mb-3">
-                  <Link 
-                    href="/"
-                    className="btn px-4 py-2"
-                    style={{
-                      background: 'linear-gradient(135deg, #2c5282 0%, #1a365d 100%)',
-                      border: 'none',
-                      color: 'white',
-                      borderRadius: '8px',
-                      fontSize: '0.9rem',
-                      fontWeight: '600',
-                      boxShadow: '0 2px 8px rgba(44, 82, 130, 0.3)'
-                    }}
-                  >
-                    <i className="bi bi-house-door-fill me-2"></i>
-                    Go to Login
-                  </Link>
-
-                  <button 
-                    onClick={() => window.history.back()}
-                    className="btn btn-outline-secondary px-4 py-2"
-                    style={{
-                      borderRadius: '8px',
-                      fontSize: '0.9rem',
-                      fontWeight: '600',
-                      borderWidth: '1px'
-                    }}
-                  >
-                    <i className="bi bi-arrow-left me-2"></i>
-                    Go Back
-                  </button>
+                  {!authLoading && (
+                    <button 
+                      onClick={handleGoHome}
+                      className="btn px-4 py-2"
+                      style={{
+                        background: 'linear-gradient(135deg, #2c5282 0%, #1a365d 100%)',
+                        border: 'none',
+                        color: 'white',
+                        borderRadius: '8px',
+                        fontSize: '0.9rem',
+                        fontWeight: '600',
+                        boxShadow: '0 2px 8px rgba(44, 82, 130, 0.3)'
+                      }}
+                    >
+                      <i className={`bi ${isAuthenticated ? 'bi-house-door-fill' : 'bi-box-arrow-in-right'} me-2`}></i>
+                      {isAuthenticated ? 'Go to Home' : 'Go to Login'}
+                    </button>
+                  )}
                 </div>
 
                 {/* Additional Info */}

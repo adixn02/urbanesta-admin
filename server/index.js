@@ -29,9 +29,10 @@ import activityLogRoutes from "./routes/activityLogRoutes.js";
 import homeVideoRoutes from "./routes/homeVideoRoutes.js";
 import videoLogRoutes from "./routes/videoLogRoutes.js";
 import forgotPasswordRoutes from "./routes/forgotPasswordRoutes.js";
-import { securityConfig, validateRequest } from "./middleware/security.js";
+import { securityConfig, validateRequest, validateRequestSize } from "./middleware/security.js";
 import logger from "./utils/logger.js";
 import { validateRequiredEnv } from "./config/validateEnv.js";
+import { sanitizeObject } from "./utils/sanitize.js";
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -142,8 +143,39 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Request validation middleware
 app.use(validateRequest);
 
+// Request size validation middleware (additional check)
+app.use(validateRequestSize('10mb'));
+
+// Input sanitization middleware (apply globally for all routes)
+app.use((req, res, next) => {
+  // Sanitize request body
+  if (req.body && typeof req.body === 'object') {
+    req.body = sanitizeObject(req.body);
+  }
+  // Note: req.query is read-only in Express, so we don't sanitize it globally
+  // Query parameters should be sanitized individually in routes where they're used
+  // (e.g., using escapeRegex for search queries)
+  next();
+});
+
 // General rate limiting
 app.use(securityConfig.rateLimits.general);
+
+// Cache-control headers for sensitive endpoints - prevent caching of sensitive data
+app.use((req, res, next) => {
+  // Sensitive endpoints that should never be cached
+  const sensitivePaths = ['/api/admin', '/api/leads', '/api/users'];
+  const isSensitivePath = sensitivePaths.some(path => req.path.startsWith(path));
+  
+  if (isSensitivePath) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+  }
+  next();
+});
 
 // Serve uploaded files from local storage
 app.use('/uploads', express.static('uploads'));
@@ -155,14 +187,16 @@ app.use("/api/2factor", twoFactorAuthRoutes); // Public - for login OTP
 app.use("/api/auth", authRoutes); // Public - for authentication
 
 // PROTECTED ROUTES (AUTHENTICATION REQUIRED)
+// Apply strict rate limiting to sensitive endpoints to prevent data scraping
+app.use("/api/admin", securityConfig.rateLimits.strict, adminRoutes); // Protected - has authenticateJWT middleware
+app.use("/api/leads", securityConfig.rateLimits.strict, leadRoutes); // Strict rate limit for leads (PII)
+app.use("/api/users", securityConfig.rateLimits.strict, userRoutes); // Strict rate limit for user data
+
 app.use("/api/builders", builderRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/cities", cityRoutes);
 app.use("/api/properties", propertyRoutes);
 app.use("/api/upload", uploadRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/leads", leadRoutes);
-app.use("/api/admin", adminRoutes); // Protected - has authenticateJWT middleware
 app.use("/api/admin/logs", activityLogRoutes); // Protected
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/property-views", propertyViewRoutes);
@@ -227,14 +261,15 @@ app.use((req, res) => {
 
 // MongoDB connection with improved configuration
 const mongooseOptions = {
-  serverSelectionTimeoutMS: 10000,
+  serverSelectionTimeoutMS: 30000, // Increased from 10s to 30s for better reliability
   socketTimeoutMS: 45000,
-  connectTimeoutMS: 10000,
+  connectTimeoutMS: 30000, // Increased from 10s to 30s
   retryWrites: true,
   w: 'majority',
   maxPoolSize: 10, // Maintain up to 10 socket connections
   minPoolSize: 2, // Maintain at least 2 socket connections
   maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
+  // Note: maxTimeMS is set on individual queries, not at connection level
 };
 
 let server;

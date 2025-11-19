@@ -10,10 +10,11 @@ export const securityConfig = {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        // Removed 'unsafe-inline' - use nonces or external stylesheets
-        styleSrc: ["'self'", "https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
-        // Removed 'unsafe-inline' and 'unsafe-eval' - use external scripts or nonces
-        scriptSrc: ["'self'", "https://cdn.jsdelivr.net"],
+        // Next.js requires 'unsafe-inline' for styles (or use nonces in future)
+        styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
+        // Next.js requires 'unsafe-inline' and 'unsafe-eval' for scripts (or use nonces in future)
+        // Note: Consider implementing nonces for better security in future
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],
         imgSrc: ["'self'", "data:", "https:", "blob:"],
         fontSrc: ["'self'", "https://cdn.jsdelivr.net", "https://fonts.gstatic.com"],
         connectSrc: ["'self'"],

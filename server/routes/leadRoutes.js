@@ -1,10 +1,15 @@
 import express from "express";
 import Lead from "../models/Lead.js";
+// Ensure models are registered before using populate
+import User from "../models/User.js";
+import Managedproperty from "../models/property.js";
 import XLSX from "xlsx";
 import { authenticateJWT } from "../middleware/jwtAuth.js";
 import { requireLeadsAccess } from "../middleware/roleAuth.js";
 import { escapeRegex } from "../utils/sanitize.js";
 import { logActivity } from "../middleware/activityLogger.js";
+import { sanitizeLeadResponse, sanitizeArray } from "../utils/responseSanitizer.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -32,10 +37,12 @@ router.get("/export", logActivity, async (req, res) => {
     if (formType) filter.formType = formType;
     if (assignedTo) filter.assignedTo = assignedTo;
     if (search) {
+      // SECURITY: Escape regex special characters to prevent ReDoS and injection attacks
+      const escapedSearch = escapeRegex(search);
       filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } }
+        { name: { $regex: escapedSearch, $options: 'i' } },
+        { email: { $regex: escapedSearch, $options: 'i' } },
+        { phone: { $regex: escapedSearch, $options: 'i' } }
       ];
     }
     
@@ -51,13 +58,24 @@ router.get("/export", logActivity, async (req, res) => {
     }
     
     // Get all leads matching the filter (no pagination for export)
+    // For export, we need full data but still exclude metadata
     const leads = await Lead.find(filter)
-      .populate('assignedTo', 'name email')
-      .populate('propertyInterest', 'title location')
-      .select('-__v')
-      .sort({ createdAt: -1 });
+      .select('-__v -metadata') // Exclude metadata but keep email/phone for export
+      .populate({
+        path: 'assignedTo',
+        select: 'name',
+        model: 'User'
+      })
+      .populate({
+        path: 'propertyInterest',
+        select: 'title projectName location fullAddress type',
+        model: 'Managedproperty'
+      })
+      .sort({ createdAt: -1 })
+      .lean();
     
     // Prepare data for Excel - include all fields as they are stored
+    // Note: Export contains full email/phone for business use, but API responses are masked
     const excelData = leads.map(lead => ({
       'Name': lead.name || '',
       'Email': lead.email || '',
@@ -71,11 +89,10 @@ router.get("/export", logActivity, async (req, res) => {
       'Priority': lead.priority ? lead.priority.replace(/\b\w/g, l => l.toUpperCase()) : '',
       'Source': lead.source ? lead.source.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '',
       'Message': lead.message || '',
-      'Assigned To': lead.assignedTo ? (lead.assignedTo.name || lead.assignedTo.email) : '',
+      'Assigned To': lead.assignedTo ? (lead.assignedTo.name || '') : '',
       'Tags': lead.tags && lead.tags.length > 0 ? lead.tags.join(', ') : '',
       'Follow Up Date': lead.followUpDate ? new Date(lead.followUpDate).toLocaleDateString() : '',
-      'IP Address': lead.metadata?.ipAddress || '',
-      'User Agent': lead.metadata?.userAgent || '',
+      // Excluded: IP Address and User Agent for security
       'Is Active': lead.isActive ? 'Yes' : 'No',
       'Created At': lead.createdAt ? new Date(lead.createdAt).toLocaleString() : '',
       'Updated At': lead.updatedAt ? new Date(lead.updatedAt).toLocaleString() : ''
@@ -125,12 +142,15 @@ router.get("/export", logActivity, async (req, res) => {
     res.send(excelBuffer);
     
   } catch (error) {
-    console.error('Error exporting leads:', error);
-    console.error('Error stack:', error.stack);
+    logger.error('Error exporting leads:', { 
+      error: error.message, 
+      stack: error.stack,
+      name: error.name 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to export leads',
-      details: error.message
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
     });
   }
 });
@@ -159,10 +179,12 @@ router.get("/", logActivity, async (req, res) => {
     if (formType) filter.formType = formType;
     if (assignedTo) filter.assignedTo = assignedTo;
     if (search) {
+      // SECURITY: Escape regex special characters to prevent ReDoS and injection attacks
+      const escapedSearch = escapeRegex(search);
       filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } }
+        { name: { $regex: escapedSearch, $options: 'i' } },
+        { email: { $regex: escapedSearch, $options: 'i' } },
+        { phone: { $regex: escapedSearch, $options: 'i' } }
       ];
     }
     
@@ -186,20 +208,46 @@ router.get("/", logActivity, async (req, res) => {
     
     
     // Get leads with pagination and populate references
-    const leads = await Lead.find(filter)
-      .populate('assignedTo', 'name email')
-      .populate('propertyInterest', 'title location')
-      .select('-__v')
-      .sort(sort)
-      .skip(skip)
-      .limit(parseInt(limit));
+    // Exclude sensitive metadata (IP, user agent) from query
+    let leads;
+    try {
+      leads = await Lead.find(filter)
+        .select('-__v -metadata')
+        .populate({
+          path: 'assignedTo',
+          select: 'name',
+          model: 'User' // Explicitly specify the model
+        })
+        .populate({
+          path: 'propertyInterest',
+          select: 'title projectName location fullAddress type',
+          model: 'Managedproperty' // Explicitly specify the model
+        })
+        .sort(sort)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+    } catch (populateError) {
+      // If populate fails, try without populate
+      logger.warn('Populate failed, fetching leads without populate:', { error: populateError.message });
+      leads = await Lead.find(filter)
+        .select('-__v -metadata')
+        .sort(sort)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+    }
     
     // Get total count for pagination
     const total = await Lead.countDocuments(filter);
     
+    // Sanitize all lead responses - mask email and phone
+    // Filter out any null items from sanitization
+    const sanitizedLeads = sanitizeArray(leads, sanitizeLeadResponse, req.user?.role || 'admin').filter(lead => lead !== null);
+    
     res.json({
       success: true,
-      data: leads,
+      data: sanitizedLeads,
       pagination: {
         current: parseInt(page),
         pages: Math.ceil(total / parseInt(limit)),
@@ -207,11 +255,15 @@ router.get("/", logActivity, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching leads:', error);
+    logger.error('Error fetching leads:', { 
+      error: error.message, 
+      stack: error.stack,
+      name: error.name 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch leads',
-      details: error.message
+      details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 });
@@ -257,11 +309,14 @@ router.get("/stats", logActivity, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching lead stats:', error);
+    logger.error('Error fetching lead stats:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch lead statistics',
-      details: error.message
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
     });
   }
 });
@@ -270,9 +325,18 @@ router.get("/stats", logActivity, async (req, res) => {
 router.get("/:id", logActivity, async (req, res) => {
   try {
     const lead = await Lead.findById(req.params.id)
-      .populate('assignedTo', 'name email')
-      .populate('propertyInterest', 'title location')
-      .select('-__v');
+      .select('-__v -metadata') // Exclude metadata (IP, user agent)
+      .populate({
+        path: 'assignedTo',
+        select: 'name',
+        model: 'User'
+      })
+      .populate({
+        path: 'propertyInterest',
+        select: 'title projectName location fullAddress type',
+        model: 'Managedproperty'
+      })
+      .lean();
     
     if (!lead) {
       return res.status(404).json({
@@ -281,16 +345,22 @@ router.get("/:id", logActivity, async (req, res) => {
       });
     }
     
+    // Sanitize lead response - mask email and phone
+    const sanitized = sanitizeLeadResponse(lead, req.user?.role);
+    
     res.json({
       success: true,
-      data: lead
+      data: sanitized
     });
   } catch (error) {
-    console.error('Error fetching lead:', error);
+    logger.error('Error fetching lead:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch lead',
-      details: error.message
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
     });
   }
 });
@@ -301,16 +371,22 @@ router.post("/", logActivity, async (req, res) => {
     const lead = new Lead(req.body);
     await lead.save();
     
+    // Sanitize response - mask email and phone
+    const sanitized = sanitizeLeadResponse(lead, req.user?.role);
+    
     res.status(201).json({
       success: true,
-      data: lead
+      data: sanitized
     });
   } catch (error) {
-    console.error('Error creating lead:', error);
+    logger.error('Error creating lead:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(400).json({
       success: false,
       error: 'Failed to create lead',
-      details: error.message
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
     });
   }
 });
@@ -341,13 +417,25 @@ router.put("/:id", logActivity, async (req, res) => {
       }
       
       const updatedLead = await Lead.findById(req.params.id)
-        .populate('assignedTo', 'name email')
-        .populate('propertyInterest', 'title location')
-        .select('-__v');
+        .select('-__v -metadata')
+        .populate({
+          path: 'assignedTo',
+          select: 'name',
+          model: 'User'
+        })
+        .populate({
+          path: 'propertyInterest',
+          select: 'title projectName location fullAddress type',
+          model: 'Managedproperty'
+        })
+        .lean();
+      
+      // Sanitize response
+      const sanitized = sanitizeLeadResponse(updatedLead, req.user?.role);
       
       res.json({
         success: true,
-        data: updatedLead
+        data: sanitized
       });
     } else {
       // Regular update without notes
@@ -355,9 +443,19 @@ router.put("/:id", logActivity, async (req, res) => {
         req.params.id,
         updateData,
         { new: true, runValidators: true }
-      ).populate('assignedTo', 'name email')
-       .populate('propertyInterest', 'title location')
-       .select('-__v');
+      )
+        .select('-__v -metadata')
+        .populate({
+          path: 'assignedTo',
+          select: 'name',
+          model: 'User'
+        })
+        .populate({
+          path: 'propertyInterest',
+          select: 'title projectName location fullAddress type',
+          model: 'Managedproperty'
+        })
+        .lean();
       
       if (!lead) {
         return res.status(404).json({
@@ -366,17 +464,23 @@ router.put("/:id", logActivity, async (req, res) => {
         });
       }
       
+      // Sanitize response
+      const sanitized = sanitizeLeadResponse(lead, req.user?.role);
+      
       res.json({
         success: true,
-        data: lead
+        data: sanitized
       });
     }
   } catch (error) {
-    console.error('Error updating lead:', error);
+    logger.error('Error updating lead:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(400).json({
       success: false,
       error: 'Failed to update lead',
-      details: error.message
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
     });
   }
 });
@@ -402,11 +506,14 @@ router.delete("/:id", logActivity, async (req, res) => {
       message: 'Lead deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting lead:', error);
+    logger.error('Error deleting lead:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to delete lead',
-      details: error.message
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
     });
   }
 });

@@ -7,25 +7,26 @@ const router = express.Router();
 // In-memory store for rate limiting (in production, use Redis)
 const rateLimitStore = new Map();
 
-// Helper function to check rate limit (3 attempts per hour per phone number)
+// Helper function to check rate limit (3 OTP requests per hour per phone number)
+// Note: This counts OTP REQUESTS, not OTP verification failures
 function checkRateLimit(phoneNumber) {
   const now = Date.now();
   const key = `forgot_${phoneNumber}`;
   
   if (!rateLimitStore.has(key)) {
     rateLimitStore.set(key, {
-      attempts: 0,
-      firstAttempt: now,
+      otpRequests: 0, // Changed from 'attempts' to 'otpRequests' for clarity
+      firstRequest: now,
       blockedUntil: null
     });
   }
   
   const data = rateLimitStore.get(key);
   
-  // Reset if more than 1 hour has passed
-  if (now - data.firstAttempt > 60 * 60 * 1000) {
-    data.attempts = 0;
-    data.firstAttempt = now;
+  // Reset if more than 1 hour has passed since first OTP request
+  if (now - data.firstRequest > 60 * 60 * 1000) {
+    data.otpRequests = 0;
+    data.firstRequest = now;
     data.blockedUntil = null;
   }
   
@@ -38,9 +39,9 @@ function checkRateLimit(phoneNumber) {
     };
   }
   
-  // Check if exceeded limit
-  if (data.attempts >= 3) {
-    data.blockedUntil = data.firstAttempt + (60 * 60 * 1000); // Block for 1 hour from first attempt
+  // Check if exceeded limit (3 OTP requests per hour)
+  if (data.otpRequests >= 3) {
+    data.blockedUntil = data.firstRequest + (60 * 60 * 1000); // Block for 1 hour from first OTP request
     return {
       allowed: false,
       attemptsLeft: 0,
@@ -50,17 +51,25 @@ function checkRateLimit(phoneNumber) {
   
   return {
     allowed: true,
-    attemptsLeft: 3 - data.attempts,
+    attemptsLeft: 3 - data.otpRequests, // Remaining OTP requests
     blockedUntil: null
   };
 }
 
-// Helper function to increment attempt
-function incrementAttempt(phoneNumber) {
+// Helper function to increment OTP request count
+// This is called when an OTP is successfully sent (not on verification failures)
+function incrementOTPRequest(phoneNumber) {
   const key = `forgot_${phoneNumber}`;
   const data = rateLimitStore.get(key);
   if (data) {
-    data.attempts += 1;
+    data.otpRequests += 1;
+  } else {
+    // Initialize if doesn't exist
+    rateLimitStore.set(key, {
+      otpRequests: 1,
+      firstRequest: Date.now(),
+      blockedUntil: null
+    });
   }
 }
 
@@ -96,16 +105,17 @@ router.post('/send-otp', async (req, res) => {
       });
     }
     
-    // Check rate limit (using normalized phone)
-    const rateLimit = checkRateLimit(normalizedPhone);
-    if (!rateLimit.allowed) {
-      const minutesLeft = Math.ceil((rateLimit.blockedUntil - Date.now()) / 1000 / 60);
+    // Check rate limit (using normalized phone) - BEFORE incrementing
+    const rateLimitBefore = checkRateLimit(normalizedPhone);
+    if (!rateLimitBefore.allowed) {
+      const minutesLeft = Math.ceil((rateLimitBefore.blockedUntil - Date.now()) / 1000 / 60);
       return res.status(429).json({
         success: false,
         code: 'RATE_LIMIT_EXCEEDED',
         error: `Too many password reset attempts. Please try again in ${minutesLeft} minutes.`,
-        blockedUntil: rateLimit.blockedUntil,
-        attemptsLeft: 0
+        blockedUntil: rateLimitBefore.blockedUntil,
+        attemptsLeft: 0,
+        attemptsRemaining: 0
       });
     }
     
@@ -123,12 +133,30 @@ router.post('/send-otp', async (req, res) => {
     if (!user) {
       return res.status(404).json({
         success: false,
-        error: 'No account found with this phone number. Please check and try again.'
+        error: 'No registered Admin/Sub-Admin account found with this phone number. Only registered administrators can reset their password. Please contact system administrator if you need access.',
+        code: 'USER_NOT_FOUND'
       });
     }
     
-    // Increment attempt counter (using normalized phone)
-    incrementAttempt(normalizedPhone);
+    // Increment OTP request counter (using normalized phone) - AFTER user validation and BEFORE sending OTP
+    // This counts the OTP request, not verification attempts
+    incrementOTPRequest(normalizedPhone);
+    
+    // Recalculate rate limit AFTER incrementing to get accurate remaining OTP requests
+    const rateLimitAfter = checkRateLimit(normalizedPhone);
+    
+    // Check if we just exceeded the limit after incrementing
+    if (!rateLimitAfter.allowed) {
+      const minutesLeft = Math.ceil((rateLimitAfter.blockedUntil - Date.now()) / 1000 / 60);
+      return res.status(429).json({
+        success: false,
+        code: 'RATE_LIMIT_EXCEEDED',
+        error: `Maximum 3 OTP requests per hour exceeded. Please try again in ${minutesLeft} minutes.`,
+        blockedUntil: rateLimitAfter.blockedUntil,
+        attemptsLeft: 0,
+        attemptsRemaining: 0
+      });
+    }
     
     // Format phone for 2Factor API (add +91 prefix if not present)
     let formattedPhone = normalizedPhone;
@@ -190,12 +218,22 @@ router.post('/send-otp', async (req, res) => {
       sessionId
     });
     
+    // Calculate OTP requests used and remaining AFTER incrementing
+    const key = `forgot_${normalizedPhone}`;
+    const rateLimitData = rateLimitStore.get(key);
+    const otpRequestsUsed = rateLimitData ? rateLimitData.otpRequests : 1;
+    // Use rateLimitAfter which was calculated AFTER incrementing
+    const otpRequestsRemaining = rateLimitAfter.allowed ? rateLimitAfter.attemptsLeft : 0;
+    
     res.json({
       success: true,
       sessionId,
       expiresAt,
-      attemptsLeft: rateLimit.attemptsLeft - 1, // -1 because we just incremented
-      message: `OTP sent to ${user.role} ${user.name} (${normalizedPhone})`
+      attemptsUsed: otpRequestsUsed, // Number of OTP requests sent
+      attemptsRemaining: otpRequestsRemaining, // Remaining OTP requests allowed
+      attemptsLeft: otpRequestsRemaining, // Keep for backward compatibility
+      maxAttempts: 3,
+      message: `OTP sent successfully to registered ${user.role === 'admin' ? 'Admin' : 'Sub-Admin'} account`
     });
     
   } catch (error) {
@@ -247,22 +285,12 @@ router.post('/verify-otp', async (req, res) => {
       const verifyResult = await twoFactorService.verifyOTP(session.twoFactorSessionId, otp);
       
       if (!verifyResult.success) {
-        // Check rate limit
-        const rateLimit = checkRateLimit(session.phoneNumber);
-        if (!rateLimit.allowed) {
-          return res.status(429).json({
-            success: false,
-            code: 'RATE_LIMIT_EXCEEDED',
-            error: 'Too many failed attempts. Please try again later.',
-            blockedUntil: rateLimit.blockedUntil,
-            attemptsLeft: 0
-          });
-        }
-        
+        // OTP verification failure - don't count towards OTP request limit
+        // Just return error without affecting the 3 OTP requests per hour limit
         return res.status(400).json({
           success: false,
-          error: 'Invalid OTP',
-          attemptsLeft: rateLimit.attemptsLeft
+          error: 'Invalid OTP. Please check and try again.',
+          code: 'INVALID_OTP'
         });
       }
     } catch (error) {

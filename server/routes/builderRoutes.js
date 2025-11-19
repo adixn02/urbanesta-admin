@@ -7,6 +7,7 @@ import { requireAdminOrSubAdmin } from "../middleware/roleAuth.js";
 import { logActivity } from "../middleware/activityLogger.js";
 import { sanitizeObject, sanitizeString } from "../utils/sanitize.js";
 import { handleRouteError, getErrorMessage } from "../utils/errorHandler.js";
+import { sanitizeBuilderResponse } from "../utils/responseSanitizer.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -18,14 +19,17 @@ router.use(requireAdminOrSubAdmin);
 // ✅ Get all builders
 router.get("/", async (req, res) => {
   try {
-    const builders = await Builder.find().sort({ displayOrder: 1 });
-    // Convert image fields to CloudFront URLs
+    const builders = await Builder.find()
+      .select('-__v -createdAt -updatedAt -contactInfo')
+      .sort({ displayOrder: 1 })
+      .lean();
+    
+    // Sanitize and convert image fields to CloudFront URLs
     const buildersWithCloudFrontUrls = builders.map((builder) => {
-      return {
-        ...builder._doc,
-        logo: builder.logo ? convertToCloudFrontUrl(builder.logo) : "",
-        backgroundImage: builder.backgroundImage ? convertToCloudFrontUrl(builder.backgroundImage) : "",
-      };
+      const sanitized = sanitizeBuilderResponse(builder, req.user?.role);
+      sanitized.logo = builder.logo ? convertToCloudFrontUrl(builder.logo) : "";
+      sanitized.backgroundImage = builder.backgroundImage ? convertToCloudFrontUrl(builder.backgroundImage) : "";
+      return sanitized;
     });
     res.json(buildersWithCloudFrontUrls);
   } catch (err) {
@@ -67,17 +71,20 @@ router.get("/stats", async (req, res) => {
 // ✅ Get single builder by slug
 router.get("/:slug", async (req, res) => {
   try {
-    const builder = await Builder.findOne({ slug: req.params.slug });
+    const builder = await Builder.findOne({ slug: req.params.slug })
+      .select('-__v -createdAt -updatedAt -contactInfo')
+      .lean();
+    
     if (!builder) {
       return res.status(404).json({ error: "Builder not found" });
     }
-     // Convert images before returning
-    const responseBuilder = {
-      ...builder._doc,
-      logo: builder.logo ? convertToCloudFrontUrl(builder.logo) : "",
-      backgroundImage: builder.backgroundImage ? convertToCloudFrontUrl(builder.backgroundImage) : "",
-    };
-    res.json(responseBuilder);
+    
+    // Sanitize and convert images before returning
+    const sanitized = sanitizeBuilderResponse(builder, req.user?.role);
+    sanitized.logo = builder.logo ? convertToCloudFrontUrl(builder.logo) : "";
+    sanitized.backgroundImage = builder.backgroundImage ? convertToCloudFrontUrl(builder.backgroundImage) : "";
+    
+    res.json(sanitized);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -100,7 +107,10 @@ router.put("/order", async (req, res) => {
     await Promise.all(updatePromises);
     res.json({ message: "Builder order updated successfully" });
   } catch (err) {
-    console.error("Error updating builder order:", err);
+    logger.error("Error updating builder order:", { 
+      error: err.message, 
+      stack: err.stack 
+    });
     res.status(500).json({ error: err.message });
   }
 });
@@ -172,9 +182,14 @@ router.post("/", logActivity, async (req, res) => {
     // Update activity data with created builder ID
     req.activityData.resourceId = newBuilder._id;
     
+    // Sanitize response
+    const sanitized = sanitizeBuilderResponse(newBuilder, req.user?.role);
+    sanitized.logo = newBuilder.logo ? convertToCloudFrontUrl(newBuilder.logo) : "";
+    sanitized.backgroundImage = newBuilder.backgroundImage ? convertToCloudFrontUrl(newBuilder.backgroundImage) : "";
+    
     res.status(201).json({
       success: true,
-      data: newBuilder,
+      data: sanitized,
       message: 'Builder created successfully'
     });
   } catch (err) {
@@ -254,7 +269,12 @@ router.put("/:id", logActivity, async (req, res) => {
       severity: 'medium'
     };
 
-    res.json({ success: true, data: builder, message: 'Builder updated successfully' });
+    // Sanitize response
+    const sanitized = sanitizeBuilderResponse(builder, req.user?.role);
+    sanitized.logo = builder.logo ? convertToCloudFrontUrl(builder.logo) : "";
+    sanitized.backgroundImage = builder.backgroundImage ? convertToCloudFrontUrl(builder.backgroundImage) : "";
+
+    res.json({ success: true, data: sanitized, message: 'Builder updated successfully' });
   } catch (err) {
     await handleRouteError(err, req, res, 'update_builder', 'Builder', 400);
   }

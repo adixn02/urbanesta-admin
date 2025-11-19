@@ -24,9 +24,9 @@
     "pm2:save": "pm2 save",
     "pm2:startup": "pm2 startup",
     "deploy": "cp env.production .env && pm2 restart urbanesta-admin-api",
-    "health": "curl -f http://localhost:3002/health || exit 1",
-    "seed:admin": "node seedadmin.js",
-    "set-default-passwords": "node setDefaultPasswords.js"
+    "health": "curl -f http://localhost:3002/health || exit 1"
+  
+    
   },
   "keywords": [],
   "author": "",
@@ -42,7 +42,9 @@
     "bcryptjs": "^3.0.3",
     "compression": "^1.7.4",
     "cookie": "^1.0.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
+    "csurf": "^1.11.0",
     "dotenv": "^17.2.2",
     "exceljs": "^4.4.0",
     "express": "^5.1.0",

@@ -42,6 +42,13 @@ export default function Home(){
   const [resetBlockedUntil, setResetBlockedUntil] = useState(null);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [passwordValidation, setPasswordValidation] = useState({
+    minLength: false,
+    hasLowercase: false,
+    hasUppercase: false,
+    hasNumber: false,
+    hasSpecialChar: false
+  });
   
   const timerRef = useRef(null);
   const otpInputRefs = useRef([]);
@@ -347,13 +354,17 @@ export default function Home(){
 
       if (data.success) {
         setForgotSessionId(data.sessionId);
-        setAttemptsLeft(data.attemptsLeft || 3);
-        setForgotSuccess(`OTP sent successfully to +91${forgotPhone}. Attempts left: ${data.attemptsLeft || 3}/3`);
+        setAttemptsLeft(data.attemptsRemaining || data.attemptsLeft || 3);
+        // Show cleaner success message
+        setForgotSuccess(data.message || `OTP sent successfully to registered account`);
         setForgotStep('otp');
       } else {
         if (data.code === 'RATE_LIMIT_EXCEEDED') {
           setResetBlockedUntil(data.blockedUntil);
-          setForgotError(`Too many attempts! You can try again after ${new Date(data.blockedUntil).toLocaleTimeString()}`);
+          const minutesLeft = Math.ceil((new Date(data.blockedUntil).getTime() - Date.now()) / 1000 / 60);
+          setForgotError(`Maximum 3 attempts per hour exceeded. Please try again in ${minutesLeft} minutes.`);
+        } else if (data.code === 'USER_NOT_FOUND') {
+          setForgotError(data.error || 'No registered account found. Only registered Admin/Sub-Admin can reset password.');
         } else {
           setForgotError(data.error || 'Failed to send OTP');
         }
@@ -389,13 +400,14 @@ export default function Home(){
       console.log('Verify OTP response:', data);
 
       if (data.success) {
-        setForgotSuccess('OTP verified! Please set your new password.');
+        setForgotSuccess('OTP verified successfully! Please set your new password.');
         setForgotStep('password');
       } else {
-        setAttemptsLeft(data.attemptsLeft || 0);
+        setAttemptsLeft(data.attemptsRemaining || data.attemptsLeft || 0);
         if (data.code === 'RATE_LIMIT_EXCEEDED') {
           setResetBlockedUntil(data.blockedUntil);
-          setForgotError(`Too many attempts! Blocked until ${new Date(data.blockedUntil).toLocaleTimeString()}`);
+          const minutesLeft = Math.ceil((new Date(data.blockedUntil).getTime() - Date.now()) / 1000 / 60);
+          setForgotError(`Maximum 3 attempts per hour exceeded. Please try again in ${minutesLeft} minutes.`);
         } else if (data.code === 'INVALID_SESSION') {
           setForgotError('Session expired. Please request a new OTP.');
           // Reset to phone step
@@ -412,7 +424,11 @@ export default function Home(){
             setForgotOtp('');
           }, 2000);
         } else {
-          setForgotError(data.error || 'Invalid OTP');
+          // Show error - OTP verification failures don't count towards OTP request limit
+          const errorMsg = data.error || 'Invalid OTP';
+          setForgotError(errorMsg);
+          // Note: OTP verification failures don't reduce the 3 OTP requests per hour limit
+          // The user can still request a new OTP if they have remaining OTP requests
         }
       }
     } catch (error) {
@@ -420,6 +436,35 @@ export default function Home(){
       setForgotError('Network error. Please try again.');
     } finally {
       setForgotLoading(false);
+    }
+  };
+
+  // Validate password criteria in real-time
+  const validatePassword = (password) => {
+    const validation = {
+      minLength: password.length >= 8,
+      hasLowercase: /[a-z]/.test(password),
+      hasUppercase: /[A-Z]/.test(password),
+      hasNumber: /\d/.test(password),
+      hasSpecialChar: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)
+    };
+    setPasswordValidation(validation);
+    return Object.values(validation).every(v => v === true);
+  };
+
+  // Handle password input change with validation
+  const handlePasswordChange = (value) => {
+    setNewPassword(value);
+    if (value) {
+      validatePassword(value);
+    } else {
+      setPasswordValidation({
+        minLength: false,
+        hasLowercase: false,
+        hasUppercase: false,
+        hasNumber: false,
+        hasSpecialChar: false
+      });
     }
   };
 
@@ -435,7 +480,13 @@ export default function Home(){
     // Validate password strength (must match backend requirements)
     const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
     if (!passwordRegex.test(newPassword)) {
-      setForgotError('Password must be at least 8 characters and contain uppercase, lowercase, number, and special character (!@#$...)');
+      setForgotError('Password must meet all requirements: at least 8 characters, uppercase, lowercase, number, and special character');
+      return;
+    }
+
+    // Double-check validation
+    if (!validatePassword(newPassword)) {
+      setForgotError('Please ensure your password meets all the requirements below');
       return;
     }
 
@@ -490,6 +541,13 @@ export default function Home(){
     setForgotSuccess('');
     setAttemptsLeft(3);
     setResetBlockedUntil(null);
+    setPasswordValidation({
+      minLength: false,
+      hasLowercase: false,
+      hasUppercase: false,
+      hasNumber: false,
+      hasSpecialChar: false
+    });
   };
 
   // Show loading spinner while checking authentication
@@ -840,11 +898,15 @@ export default function Home(){
                   </div>
                 )}
 
-                {/* Rate Limit Warning */}
-                {attemptsLeft < 3 && attemptsLeft > 0 && (
-                  <div className="alert alert-warning">
-                    <i className="bi bi-exclamation-triangle me-2"></i>
-                    <strong>Warning:</strong> {attemptsLeft} attempt(s) remaining (3 max per hour)
+                {/* Rate Limit Warning - Only show when OTP requests are low (1 or 2 remaining) */}
+                {attemptsLeft < 3 && attemptsLeft > 0 && forgotStep === 'otp' && (
+                  <div className="alert alert-info d-flex align-items-center">
+                    <i className="bi bi-info-circle-fill me-2" style={{ fontSize: '1.2rem' }}></i>
+                    <div>
+                      <strong>OTP Requests Remaining:</strong> {attemptsLeft} of 3 (per hour)
+                      <small className="d-block text-muted mt-1">You can request a new OTP {attemptsLeft} more time{attemptsLeft > 1 ? 's' : ''} in the next hour if needed.</small>
+                      {attemptsLeft === 1 && <span className="text-warning ms-2 d-block mt-1">⚠️ Last OTP request available!</span>}
+                    </div>
                   </div>
                 )}
 
@@ -868,7 +930,7 @@ export default function Home(){
                         style={{ fontSize: '1.1rem', padding: '0.75rem' }}
                       />
                       <div className="form-text" style={{ fontSize: '0.875rem' }}>
-                        Enter your registered phone number to reset your password
+                        Only registered Admin/Sub-Admin accounts can reset password. Maximum 3 OTP requests per hour.
                       </div>
                     </div>
 
@@ -970,7 +1032,7 @@ export default function Home(){
                       </div>
                       <div className="form-text text-center mt-2" style={{ fontSize: '0.875rem' }}>
                         <i className="bi bi-phone-vibrate me-1"></i>
-                        OTP sent to +91{forgotPhone}
+                        OTP sent to registered account (+91{forgotPhone})
                       </div>
                     </div>
 
@@ -1024,10 +1086,10 @@ export default function Home(){
                       <div className="position-relative">
                         <input 
                           type={showNewPassword ? "text" : "password"}
-                          className="form-control form-control-lg" 
+                          className={`form-control form-control-lg ${newPassword && !Object.values(passwordValidation).every(v => v === true) ? 'border-warning' : newPassword && Object.values(passwordValidation).every(v => v === true) ? 'border-success' : ''}`}
                           placeholder="Enter new password" 
                           value={newPassword} 
-                          onChange={(e) => setNewPassword(e.target.value)}
+                          onChange={(e) => handlePasswordChange(e.target.value)}
                           required
                           disabled={forgotLoading}
                           minLength="8"
@@ -1048,9 +1110,39 @@ export default function Home(){
                           <i className={`bi ${showNewPassword ? 'bi-eye-slash' : 'bi-eye'}`} style={{ fontSize: '1.2rem' }}></i>
                         </button>
                       </div>
-                      <div className="form-text">
-                        Password must be at least 8 characters and contain uppercase, lowercase, number, and special character
-                      </div>
+                      {/* Password Requirements Checklist */}
+                      {newPassword && (
+                        <div className="mt-2" style={{ fontSize: '0.875rem' }}>
+                          <div className="fw-bold mb-2">Password Requirements:</div>
+                          <div className="d-flex flex-column gap-1">
+                            <div className={`d-flex align-items-center ${passwordValidation.minLength ? 'text-success' : 'text-muted'}`}>
+                              <i className={`bi ${passwordValidation.minLength ? 'bi-check-circle-fill' : 'bi-circle'} me-2`}></i>
+                              <span>At least 8 characters</span>
+                            </div>
+                            <div className={`d-flex align-items-center ${passwordValidation.hasLowercase ? 'text-success' : 'text-muted'}`}>
+                              <i className={`bi ${passwordValidation.hasLowercase ? 'bi-check-circle-fill' : 'bi-circle'} me-2`}></i>
+                              <span>One lowercase letter (a-z)</span>
+                            </div>
+                            <div className={`d-flex align-items-center ${passwordValidation.hasUppercase ? 'text-success' : 'text-muted'}`}>
+                              <i className={`bi ${passwordValidation.hasUppercase ? 'bi-check-circle-fill' : 'bi-circle'} me-2`}></i>
+                              <span>One uppercase letter (A-Z)</span>
+                            </div>
+                            <div className={`d-flex align-items-center ${passwordValidation.hasNumber ? 'text-success' : 'text-muted'}`}>
+                              <i className={`bi ${passwordValidation.hasNumber ? 'bi-check-circle-fill' : 'bi-circle'} me-2`}></i>
+                              <span>One number (0-9)</span>
+                            </div>
+                            <div className={`d-flex align-items-center ${passwordValidation.hasSpecialChar ? 'text-success' : 'text-muted'}`}>
+                              <i className={`bi ${passwordValidation.hasSpecialChar ? 'bi-check-circle-fill' : 'bi-circle'} me-2`}></i>
+                              <span>One special character (!@#$%^&*...)</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {!newPassword && (
+                        <div className="form-text">
+                          Password must be at least 8 characters and contain uppercase, lowercase, number, and special character
+                        </div>
+                      )}
                     </div>
 
                     <div className="mb-3">
@@ -1104,9 +1196,9 @@ export default function Home(){
                     <button 
                       type="submit" 
                       className="btn btn-lg w-100 mt-4"
-                      disabled={forgotLoading || !newPassword || !confirmPassword || newPassword !== confirmPassword}
+                      disabled={forgotLoading || !newPassword || !confirmPassword || newPassword !== confirmPassword || !Object.values(passwordValidation).every(v => v === true)}
                       style={{
-                        background: newPassword && confirmPassword && newPassword === confirmPassword && !forgotLoading ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : '#6c757d',
+                        background: newPassword && confirmPassword && newPassword === confirmPassword && Object.values(passwordValidation).every(v => v === true) && !forgotLoading ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : '#6c757d',
                         border: 'none',
                         color: 'white',
                         fontSize: '1.1rem',

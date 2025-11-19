@@ -9,6 +9,7 @@ import { requireAdminOrSubAdmin } from '../middleware/roleAuth.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { sanitizeObject, sanitizeString, escapeRegex } from '../utils/sanitize.js';
 import { handleRouteError } from '../utils/errorHandler.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -238,7 +239,10 @@ router.get('/:id', async (req, res) => {
       data: property
     });
   } catch (error) {
-    console.error('Error fetching property:', error);
+    logger.error('Error fetching property:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch property',
@@ -358,13 +362,16 @@ router.post('/', logActivity, async (req, res) => {
           );
           if (subcategory) {
             propertyData.subcategoryName = subcategory.name;
-            console.log(`Found subcategory name for ${propertyData.type} property:`, subcategory.name);
+            logger.debug(`Found subcategory name for ${propertyData.type} property:`, { subcategoryName: subcategory.name });
           } else {
-            console.log(`Subcategory not found for ID: ${propertyData.subcategory}`);
+            logger.warn(`Subcategory not found for ID: ${propertyData.subcategory}`);
           }
         }
       } catch (error) {
-        console.error('Error fetching subcategory name:', error);
+        logger.error('Error fetching subcategory name:', { 
+          error: error.message, 
+          stack: error.stack 
+        });
       }
     }
     
@@ -546,7 +553,10 @@ router.get('/stats/summary', async (req, res) => {
       data: result
     });
   } catch (error) {
-    console.error('Error fetching property stats:', error);
+    logger.error('Error fetching property stats:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch property statistics',
@@ -558,14 +568,14 @@ router.get('/stats/summary', async (req, res) => {
 // POST /api/properties/migrate-subcategory-names - Migrate existing properties to have subcategory names
 router.post('/migrate-subcategory-names', async (req, res) => {
   try {
-    console.log('Starting subcategory name migration...');
+    logger.info('Starting subcategory name migration...');
     
     // Find all properties that don't have subcategoryName set
     const properties = await Managedproperty.find({ 
       subcategoryName: { $exists: false } 
     }).populate('category', 'deepSubcategories');
     
-    console.log(`Found ${properties.length} properties without subcategory names`);
+    logger.info(`Found ${properties.length} properties without subcategory names`);
     
     let updatedCount = 0;
     
@@ -579,7 +589,7 @@ router.post('/migrate-subcategory-names', async (req, res) => {
           property.subcategoryName = subcategory.name;
           await property.save();
           updatedCount++;
-          console.log(`Updated property ${property.title}: ${subcategory.name}`);
+          logger.debug(`Updated property ${property.title}: ${subcategory.name}`);
         }
       }
     }
@@ -591,7 +601,10 @@ router.post('/migrate-subcategory-names', async (req, res) => {
       totalFound: properties.length
     });
   } catch (error) {
-    console.error('Error during migration:', error);
+    logger.error('Error during migration:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Migration failed',
@@ -603,7 +616,7 @@ router.post('/migrate-subcategory-names', async (req, res) => {
 // POST /api/properties/setup-sample-configurations - Add sample configurations to subcategories
 router.post('/setup-sample-configurations', async (req, res) => {
   try {
-    console.log('Setting up sample configurations...');
+    logger.info('Setting up sample configurations...');
     
     // Find all categories with subcategories
     const categories = await Category.find({ isActive: true }).select('name deepSubcategories');
@@ -625,7 +638,7 @@ router.post('/setup-sample-configurations', async (req, res) => {
           subcategory.configurations = sampleConfigurations;
           await category.save();
           updatedCount++;
-          console.log(`Added configurations to ${category.name} - ${subcategory.name}`);
+          logger.debug(`Added configurations to ${category.name} - ${subcategory.name}`);
         }
       }
     }
@@ -636,7 +649,10 @@ router.post('/setup-sample-configurations', async (req, res) => {
       updatedCount
     });
   } catch (error) {
-    console.error('Error setting up sample configurations:', error);
+    logger.error('Error setting up sample configurations:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to setup sample configurations',

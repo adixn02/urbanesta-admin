@@ -96,7 +96,7 @@ class TwoFactorService {
       logger.info(`Sending SMS OTP via 2Factor API: ${apiUrl.replace(apiKey, '***')}`);
       logger.info(`Phone number format: ${apiFormattedPhone}`);
       
-      const response = await axios.get(apiUrl, { timeout: 10000 });
+      const response = await axios.get(apiUrl, { timeout: 30000 }); // Increased from 10s to 30s
 
       // Log full 2Factor response for debugging
       logger.info(`2Factor SMS API Response:`, {
@@ -212,7 +212,7 @@ class TwoFactorService {
       
       logger.info(`2Factor Verify API: ${verifyUrl.replace(apiKey, '***')}`);
       
-      const response = await axios.get(verifyUrl, { timeout: 10000 });
+      const response = await axios.get(verifyUrl, { timeout: 30000 }); // Increased from 10s to 30s
 
       // Log verification response
       logger.info(`2Factor Verify API Response:`, {

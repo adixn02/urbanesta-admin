@@ -2,6 +2,7 @@
  * Production-ready API caching utility
  * Prevents unnecessary API calls and improves performance
  */
+import logger from './logger';
 
 class APICache {
   constructor() {
@@ -97,21 +98,21 @@ class APICache {
     if (cache && !forceRefresh) {
       const cachedData = this.get(key);
       if (cachedData !== null) {
-        console.log(`📦 Cache HIT: ${url}`);
+        logger.debug(`Cache HIT: ${url}`);
         return cachedData;
       }
     }
 
     // Check if request is already pending (request deduplication)
     if (this.pending.has(key)) {
-      console.log(`⏳ Deduplicating request: ${url}`);
+        logger.debug(`Deduplicating request: ${url}`);
       return this.pending.get(key);
     }
 
     // Create new request using provided fetch function
     const fetchPromise = (async () => {
       try {
-        console.log(`🌐 Cache MISS: ${url}`);
+        logger.debug(`Cache MISS: ${url}`);
         const data = await fetchFunction();
 
         // Cache successful responses
@@ -121,7 +122,7 @@ class APICache {
 
         return data;
       } catch (error) {
-        console.error(`❌ Fetch error: ${url}`, error);
+        logger.error(`Fetch error: ${url}`, { error: error.message, stack: error.stack });
         throw error;
       } finally {
         // Remove from pending
@@ -139,7 +140,7 @@ class APICache {
    * Invalidate cache for mutations (POST, PUT, DELETE)
    */
   invalidate(pattern) {
-    console.log(`🗑️  Invalidating cache: ${pattern}`);
+    logger.debug(`Invalidating cache: ${pattern}`);
     this.clearPattern(pattern);
   }
 }

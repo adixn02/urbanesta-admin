@@ -2,6 +2,7 @@ import express from 'express';
 import ActivityLog from '../models/ActivityLog.js';
 import { authenticateJWT } from '../middleware/jwtAuth.js';
 import { requireAdminOrSubAdmin } from '../middleware/roleAuth.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -50,11 +51,14 @@ router.get('/', async (req, res) => {
     const skip = (parseInt(page) - 1) * finalLimit;
     
     // Get logs with pagination
+    // Only populate name and role - exclude email and phoneNumber for security
     const logs = await ActivityLog.find(filter)
-      .populate('userId', 'name email phoneNumber role')
+      .populate('userId', 'name role')
+      .select('-__v')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(finalLimit);
+      .limit(finalLimit)
+      .lean();
 
     // Get total count for pagination
     const total = await ActivityLog.countDocuments(filter);
@@ -71,7 +75,10 @@ router.get('/', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching activity logs:', error);
+    logger.error('Error fetching activity logs:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch activity logs',
@@ -100,7 +107,10 @@ router.get('/summary', async (req, res) => {
       data: summary
     });
   } catch (error) {
-    console.error('Error fetching activity summary:', error);
+    logger.error('Error fetching activity summary:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch activity summary',
@@ -160,7 +170,10 @@ router.get('/stats', async (req, res) => {
       data: result
     });
   } catch (error) {
-    console.error('Error fetching activity stats:', error);
+    logger.error('Error fetching activity stats:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch activity stats',
@@ -210,7 +223,10 @@ router.post('/', async (req, res) => {
       message: 'Activity logged successfully'
     });
   } catch (error) {
-    console.error('Error creating activity log:', error);
+    logger.error('Error creating activity log:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to create activity log',

@@ -6,6 +6,7 @@ import { authenticateJWT } from '../middleware/jwtAuth.js';
 import { requireAdmin, requireRole } from '../middleware/roleAuth.js';
 import { escapeRegex } from '../utils/sanitize.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { sanitizeAdminResponse, sanitizeArray } from '../utils/responseSanitizer.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
@@ -46,18 +47,23 @@ router.get('/users', requireAdmin, async (req, res) => {
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
+    // Exclude sensitive fields - never expose phoneNumber, password, login data
     const users = await Admin.find(filter)
-      .select('-__v')
-      .populate('createdBy', 'name phoneNumber')
+      .select('-__v -password -phoneNumber -lastLogin -lastActivity -loginCount')
+      .populate('createdBy', 'name') // Only name, not phoneNumber
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .lean();
     
     const total = await Admin.countDocuments(filter);
     
+    // Sanitize all user responses
+    const sanitizedUsers = sanitizeArray(users, sanitizeAdminResponse, req.user?.role, req.user);
+    
     res.json({
       success: true,
-      data: users,
+      data: sanitizedUsers,
       pagination: {
         current: parseInt(page),
         pages: Math.ceil(total / parseInt(limit)),
@@ -239,8 +245,10 @@ router.post('/users', requireAdmin, logActivity, async (req, res) => {
     // Explicitly do NOT include email field
     const result = await Admin.collection.insertOne(insertData);
     
-    // Fetch the created user using Mongoose to get proper document
-    const newUser = await Admin.findById(result.insertedId);
+    // Fetch the created user using Mongoose to get proper document (exclude sensitive fields)
+    const newUser = await Admin.findById(result.insertedId)
+      .select('-__v -password -phoneNumber -lastLogin -lastActivity -loginCount')
+      .lean();
     
     if (!newUser) {
       throw new Error('Failed to retrieve created user');
@@ -255,9 +263,12 @@ router.post('/users', requireAdmin, logActivity, async (req, res) => {
       severity: 'medium'
     };
     
+    // Sanitize response
+    const sanitized = sanitizeAdminResponse(newUser, req.user);
+    
     res.status(201).json({
       success: true,
-      data: newUser,
+      data: sanitized,
       message: `${role} user created successfully`
     });
   } catch (error) {
@@ -404,7 +415,9 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
       userId,
       updateData,
       { new: true, runValidators: true }
-    ).select('-__v');
+    )
+      .select('-__v -password -phoneNumber -lastLogin -lastActivity -loginCount')
+      .lean();
     
     if (!updatedUser) {
       return res.status(404).json({
@@ -413,18 +426,22 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
       });
     }
     
-    // Log activity
+    // Log activity (use phoneNumber from request or existing user, not from response)
+    const userForLog = await Admin.findById(userId).select('phoneNumber').lean();
     req.activityData = {
       action: 'update_user',
       resource: 'User',
       resourceId: updatedUser._id,
-      details: `Updated user: ${updatedUser.name} (${updatedUser.phoneNumber})`,
+      details: `Updated user: ${updatedUser.name}${userForLog?.phoneNumber ? ` (${userForLog.phoneNumber})` : ''}`,
       severity: 'medium'
     };
     
+    // Sanitize response
+    const sanitized = sanitizeAdminResponse(updatedUser, req.user);
+    
     res.json({
       success: true,
-      data: updatedUser,
+      data: sanitized,
       message: 'User updated successfully'
     });
   } catch (error) {
@@ -659,6 +676,90 @@ router.post('/verify-otp-for-user', requireAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to verify OTP'
+    });
+  }
+});
+
+// Get blocked IPs endpoint (admin only)
+router.get('/blocked-ips', requireAdmin, async (req, res) => {
+  try {
+    // Import getBlockedIPs from ipBlocking utility
+    const { getBlockedIPs } = await import('../utils/ipBlocking.js');
+    
+    const blockedIPs = getBlockedIPs();
+    
+    res.json({
+      success: true,
+      data: blockedIPs,
+      total: blockedIPs.length
+    });
+  } catch (error) {
+    logger.error('Error fetching blocked IPs:', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch blocked IPs'
+    });
+  }
+});
+
+// Release (unblock) IP endpoint (admin only)
+router.post('/blocked-ips/release', requireAdmin, logActivity, async (req, res) => {
+  try {
+    const { ip } = req.body;
+    
+    if (!ip) {
+      return res.status(400).json({
+        success: false,
+        error: 'IP address is required'
+      });
+    }
+    
+    // Import releaseIP and isIPBlocked from ipBlocking utility
+    const { releaseIP, isIPBlocked } = await import('../utils/ipBlocking.js');
+    
+    // Check if IP is actually blocked
+    const blockedCheck = isIPBlocked(ip);
+    if (!blockedCheck.blocked) {
+      return res.status(400).json({
+        success: false,
+        error: 'IP address is not currently blocked'
+      });
+    }
+    
+    // Release the IP
+    const released = releaseIP(ip);
+    
+    if (!released) {
+      return res.status(404).json({
+        success: false,
+        error: 'IP address not found in blocked list'
+      });
+    }
+    
+    // Log activity
+    req.activityData = {
+      action: 'release_ip',
+      resource: 'Security',
+      resourceId: ip,
+      details: `Released blocked IP: ${ip}`,
+      severity: 'medium'
+    };
+    
+    logger.info(`IP ${ip} released by admin ${req.user.name} (${req.user.id})`);
+    
+    res.json({
+      success: true,
+      message: `IP ${ip} has been released and can now access the admin panel`,
+      data: {
+        ip: ip,
+        releasedAt: new Date()
+      }
+    });
+  } catch (error) {
+    logger.error('Error releasing IP:', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to release IP'
     });
   }
 });

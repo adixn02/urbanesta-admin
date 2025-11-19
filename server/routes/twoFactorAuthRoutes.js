@@ -9,6 +9,14 @@ import Admin from '../models/Admin.js';
 import cookie from 'cookie';
 import { logActivity } from '../middleware/activityLogger.js';
 import ActivityLog from '../models/ActivityLog.js';
+import { 
+  ipAttempts, 
+  MAX_ATTEMPTS_PER_IP, 
+  IP_BLOCK_DURATION,
+  getClientIP,
+  isIPBlocked,
+  incrementIPAttempt
+} from '../utils/ipBlocking.js';
 
 const router = express.Router();
 
@@ -27,9 +35,6 @@ router.use(authLimiter);
 // Store OTP sessions in memory (in production, use Redis or database)
 const otpSessions = new Map();
 
-// Store IP-based login attempts for blocking
-const ipAttempts = new Map();
-
 // Allowed phone numbers for admin access
 const ALLOWED_PHONES = [
   '8198982098', // Main admin
@@ -39,15 +44,11 @@ const ALLOWED_PHONES = [
 // OTP expiration time (120 seconds)
 const OTP_EXPIRY_TIME = 120 * 1000; // 2 minutes in milliseconds
 
-// IP blocking configuration
-const MAX_ATTEMPTS_PER_IP = 10;
-const IP_BLOCK_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
-
 // Send OTP endpoint
 router.post('/send-otp', async (req, res) => {
   try {
     const { phoneNumber, password } = req.body;
-    const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+    const clientIP = getClientIP(req);
 
     if (!phoneNumber) {
       return res.status(400).json({ 
@@ -63,25 +64,14 @@ router.post('/send-otp', async (req, res) => {
       });
     }
 
-    // Check IP blocking
-    const ipData = ipAttempts.get(clientIP);
-    if (ipData && ipData.blockedUntil && new Date() < ipData.blockedUntil) {
-      const remainingTime = Math.ceil((ipData.blockedUntil - new Date()) / (1000 * 60)); // minutes
+    // Check if IP is blocked
+    const blockedCheck = isIPBlocked(clientIP);
+    if (blockedCheck.blocked) {
       return res.status(429).json({
         success: false,
-        error: `IP blocked due to too many attempts. Try again in ${remainingTime} minutes.`,
-        blockedUntil: ipData.blockedUntil
-      });
-    }
-
-    // Check if IP has exceeded max attempts
-    if (ipData && ipData.attempts >= MAX_ATTEMPTS_PER_IP) {
-      ipData.blockedUntil = new Date(Date.now() + IP_BLOCK_DURATION);
-      ipAttempts.set(clientIP, ipData);
-      return res.status(429).json({
-        success: false,
-        error: `Too many attempts from this IP. Blocked for 24 hours.`,
-        blockedUntil: ipData.blockedUntil
+        error: `IP blocked due to too many attempts. Try again in ${blockedCheck.remainingMinutes} minutes.`,
+        blockedUntil: blockedCheck.blockedUntil,
+        code: 'IP_BLOCKED'
       });
     }
 
@@ -129,11 +119,41 @@ router.post('/send-otp', async (req, res) => {
     
     if (!existingUser) {
       // Increment IP attempt counter for unauthorized access
-      if (!ipData) {
-        ipAttempts.set(clientIP, { attempts: 1, firstAttempt: new Date() });
-      } else {
-        ipData.attempts += 1;
-        ipAttempts.set(clientIP, ipData);
+      const result = incrementIPAttempt(clientIP, 'Too many failed login attempts from unknown/unregistered user');
+      
+      // If IP was just blocked, log it
+      if (result.blocked) {
+        try {
+          await ActivityLog.logActivity({
+            userId: null,
+            userPhone: phoneNumber || 'unknown',
+            userName: 'Unknown Guest',
+            userRole: 'unknown',
+            action: 'unauthorized_access',
+            resource: 'Authentication',
+            resourceId: null,
+            details: `IP ${clientIP} blocked due to ${result.ipData.attempts} failed login attempts`,
+            ipAddress: clientIP,
+            userAgent: req.get('User-Agent') || 'unknown',
+            severity: 'high',
+            status: 'blocked',
+            metadata: { 
+              phoneNumber: phoneNumber || 'unknown', 
+              attemptType: 'ip_blocked', 
+              ipAttempts: result.ipData.attempts,
+              blockedUntil: result.ipData.blockedUntil
+            }
+          });
+        } catch (logError) {
+          logger.error('Failed to log IP blocking:', logError);
+        }
+        
+        return res.status(429).json({
+          success: false,
+          error: `Too many attempts from this IP. Blocked for 24 hours.`,
+          blockedUntil: result.ipData.blockedUntil,
+          code: 'IP_BLOCKED'
+        });
       }
       
       logger.warn(`Unauthorized OTP request from unknown phone: ${phoneNumber} (IP: ${clientIP})`);
@@ -202,15 +222,46 @@ router.post('/send-otp', async (req, res) => {
     if (existingUser.password) {
       const isPasswordValid = await existingUser.comparePassword(password);
       if (!isPasswordValid) {
-        // Increment IP attempt counter for wrong password
-        if (!ipData) {
-          ipAttempts.set(clientIP, { attempts: 1, firstAttempt: new Date() });
-        } else {
-          ipData.attempts += 1;
-          ipAttempts.set(clientIP, ipData);
+        // Increment IP attempt counter for wrong password (even for registered users)
+        const result = incrementIPAttempt(clientIP, 'Too many failed login attempts (wrong password)');
+        
+        // If IP was just blocked, log it
+        if (result.blocked) {
+          try {
+            await ActivityLog.logActivity({
+              userId: existingUser._id,
+              userPhone: existingUser.phoneNumber,
+              userName: existingUser.name || 'Unknown',
+              userRole: existingUser.role || 'user',
+              action: 'unauthorized_access',
+              resource: 'Authentication',
+              resourceId: existingUser._id,
+              details: `IP ${clientIP} blocked due to ${result.ipData.attempts} failed login attempts (wrong password)`,
+              ipAddress: clientIP,
+              userAgent: req.get('User-Agent') || 'unknown',
+              severity: 'high',
+              status: 'blocked',
+              metadata: { 
+                phoneNumber, 
+                attemptType: 'ip_blocked_wrong_password', 
+                ipAttempts: result.ipData.attempts,
+                blockedUntil: result.ipData.blockedUntil
+              }
+            });
+          } catch (logError) {
+            logger.error('Failed to log IP blocking:', logError);
+          }
+          
+          const remainingTime = Math.ceil((new Date(result.ipData.blockedUntil) - new Date()) / (1000 * 60));
+          return res.status(429).json({
+            success: false,
+            error: `Too many failed attempts. IP blocked for 24 hours. Try again in ${remainingTime} minutes.`,
+            code: 'IP_BLOCKED',
+            blockedUntil: result.ipData.blockedUntil
+          });
         }
         
-        logger.warn(`Wrong password attempt for: ${phoneNumber} (IP: ${clientIP})`);
+        logger.warn(`Wrong password attempt for: ${phoneNumber} (IP: ${clientIP}, Attempts: ${result.ipData.attempts})`);
         
         // Log wrong password attempt
         try {
@@ -222,12 +273,16 @@ router.post('/send-otp', async (req, res) => {
             action: 'login_failed',
             resource: 'Authentication',
             resourceId: existingUser._id,
-            details: `Wrong password attempt for: ${phoneNumber}`,
+            details: `Wrong password attempt for: ${phoneNumber} (IP: ${clientIP})`,
             ipAddress: clientIP,
             userAgent: req.get('User-Agent') || 'unknown',
             severity: 'high',
             status: 'failed',
-            metadata: { phoneNumber, reason: 'wrong_password' }
+            metadata: { 
+              phoneNumber, 
+              reason: 'wrong_password',
+              ipAttempts: result.ipData.attempts
+            }
           });
         } catch (logError) {
           logger.error('Failed to log wrong password attempt:', logError);
@@ -243,11 +298,13 @@ router.post('/send-otp', async (req, res) => {
 
     // Send OTP using 2Factor service
     const result = await twoFactorService.sendOTP(phoneNumber);
+    
+    // Format phone number for database (used in both success and error cases)
+    const dbFormattedPhone = result.dbFormattedPhone || twoFactorService.formatPhoneNumber(phoneNumber);
 
     if (result.success) {
       // Store session info with database-formatted phone number
       const sessionId = result.sessionId;
-      const dbFormattedPhone = result.dbFormattedPhone || twoFactorService.formatPhoneNumber(phoneNumber);
       
       otpSessions.set(sessionId, {
         phoneNumber: dbFormattedPhone,
@@ -456,10 +513,10 @@ router.post('/verify-otp', async (req, res) => {
         const uniqueFormats = [...new Set(phoneFormats)];
         logger.info(`Searching for user with phone formats: ${uniqueFormats.join(', ')}`);
         
-        // Search with all possible formats
+        // Search with all possible formats - add timeout to prevent hanging
         const user = await Admin.findOne({ 
           phoneNumber: { $in: uniqueFormats } 
-        });
+        }).maxTimeMS(10000); // 10 second timeout for user lookup
         
         logger.info(`Admin user found: ${user ? 'Yes' : 'No'}`, { 
           searchedPhone: session.phoneNumber,
@@ -471,8 +528,8 @@ router.post('/verify-otp', async (req, res) => {
           // User not found in database - unauthorized access
           logger.error(`Unauthorized login attempt from unknown phone: ${session.phoneNumber}`, {
             sessionId,
-            phoneNumber: session.phoneNumber,
-            totalAdmins: await Admin.countDocuments()
+            phoneNumber: session.phoneNumber
+            // Removed countDocuments() call to avoid timeout - not necessary for error logging
           });
           otpSessions.delete(sessionId);
           return res.status(401).json({ 
@@ -500,7 +557,7 @@ router.post('/verify-otp', async (req, res) => {
         user.loginCount = (user.loginCount || 0) + 1;
         
         try {
-        await user.save();
+        await user.save({ maxTimeMS: 10000 }); // 10 second timeout for save operation
         logger.info(`User login updated successfully: ${session.phoneNumber}`);
         } catch (saveError) {
           logger.error('Error saving user login data:', {
@@ -524,26 +581,25 @@ router.post('/verify-otp', async (req, res) => {
           logger.warn('Continuing login despite save error');
         }
         
-        // Also log successful OTP verification separately
-        try {
-          await ActivityLog.logActivity({
-            userId: user._id,
-            userPhone: user.phoneNumber,
-            userName: user.name || 'Unknown',
-            userRole: user.role || 'user',
-            action: 'otp_verification_success',
-            resource: 'Authentication',
-            resourceId: user._id,
-            details: `OTP verified successfully (Type: ${session.otpType || 'SMS'})`,
-            ipAddress: req.ip || req.connection.remoteAddress || 'unknown',
-            userAgent: req.get('User-Agent') || 'unknown',
-            severity: 'low',
-            status: 'success',
-            metadata: { sessionId, otpType: session.otpType || 'sms', attempts: session.attempts }
-          });
-        } catch (logError) {
+        // Also log successful OTP verification separately (non-blocking)
+        // Don't await - let it run in background to avoid timeout
+        ActivityLog.logActivity({
+          userId: user._id,
+          userPhone: user.phoneNumber,
+          userName: user.name || 'Unknown',
+          userRole: user.role || 'user',
+          action: 'otp_verification_success',
+          resource: 'Authentication',
+          resourceId: user._id,
+          details: `OTP verified successfully (Type: ${session.otpType || 'SMS'})`,
+          ipAddress: req.ip || req.connection.remoteAddress || 'unknown',
+          userAgent: req.get('User-Agent') || 'unknown',
+          severity: 'low',
+          status: 'success',
+          metadata: { sessionId, otpType: session.otpType || 'sms', attempts: session.attempts }
+        }).catch(logError => {
           logger.error('Failed to log OTP verification success:', logError);
-        }
+        });
         
         // Generate JWT tokens
         const accessToken = generateToken(user);
@@ -577,27 +633,26 @@ router.post('/verify-otp', async (req, res) => {
 
         logger.info(`OTP verified successfully for ${session.phoneNumber}`);
 
-        // Log successful login activity
-        try {
-          await ActivityLog.logActivity({
-            userId: user._id,
-            userPhone: user.phoneNumber,
-            userName: user.name || 'Unknown',
-            userRole: user.role || 'user',
-            action: 'login',
-            resource: 'Authentication',
-            resourceId: user._id,
-            details: `User logged in successfully via ${session.otpType || 'SMS'} OTP`,
-            ipAddress: req.ip || req.connection.remoteAddress || 'unknown',
-            userAgent: req.get('User-Agent') || 'unknown',
-            severity: 'low',
-            status: 'success',
-            metadata: { sessionId, otpType: session.otpType || 'sms', attempts: session.attempts }
-          });
-        } catch (logError) {
+        // Log successful login activity (non-blocking to avoid timeout)
+        // Don't await - let it run in background
+        ActivityLog.logActivity({
+          userId: user._id,
+          userPhone: user.phoneNumber,
+          userName: user.name || 'Unknown',
+          userRole: user.role || 'user',
+          action: 'login',
+          resource: 'Authentication',
+          resourceId: user._id,
+          details: `User logged in successfully via ${session.otpType || 'SMS'} OTP`,
+          ipAddress: req.ip || req.connection.remoteAddress || 'unknown',
+          userAgent: req.get('User-Agent') || 'unknown',
+          severity: 'low',
+          status: 'success',
+          metadata: { sessionId, otpType: session.otpType || 'sms', attempts: session.attempts }
+        }).catch(logError => {
           logger.error('Failed to log login activity:', logError);
           // Don't fail the login if logging fails
-        }
+        });
 
         res.json({ 
           success: true, 

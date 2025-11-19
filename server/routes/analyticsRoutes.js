@@ -2,6 +2,7 @@ import express from 'express';
 import Analytics from '../models/Analytics.js';
 import { authenticateJWT } from '../middleware/jwtAuth.js';
 import { requireAdminOrSubAdmin } from '../middleware/roleAuth.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -21,7 +22,10 @@ router.get('/total-views', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching total views:', error);
+    logger.error('Error fetching total views:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch total views',

@@ -97,3 +97,18 @@ export async function handleRouteError(error, req, res, action, resource, status
   });
 }
 
+/**
+ * Get error response object with conditional details (only in development)
+ * @param {Error} error - Error object
+ * @param {string} defaultMessage - Default error message
+ * @returns {Object} - Error response object
+ */
+export function getErrorResponse(error, defaultMessage = 'An error occurred') {
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  return {
+    success: false,
+    error: isDevelopment ? (error.message || defaultMessage) : defaultMessage,
+    ...(isDevelopment && { details: error.message })
+  };
+}
+

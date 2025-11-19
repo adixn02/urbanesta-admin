@@ -2,6 +2,7 @@ import express from 'express';
 import PropertyView from '../models/PropertyView.js';
 import { authenticateJWT } from '../middleware/jwtAuth.js';
 import { requireAdminOrSubAdmin } from '../middleware/roleAuth.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -19,7 +20,10 @@ router.get('/all', async (req, res) => {
       data: propertyViews
     });
   } catch (error) {
-    console.error('Error fetching property views:', error);
+    logger.error('Error fetching property views:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch property views',
@@ -40,7 +44,10 @@ router.get('/total', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching total property views:', error);
+    logger.error('Error fetching total property views:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch total property views',
@@ -63,7 +70,10 @@ router.get('/:propertyId', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching property view count:', error);
+    logger.error('Error fetching property view count:', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch property view count',

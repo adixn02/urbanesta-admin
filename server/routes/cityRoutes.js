@@ -9,6 +9,7 @@ import { requireAdminOrSubAdmin } from "../middleware/roleAuth.js";
 import { logActivity } from "../middleware/activityLogger.js";
 import { sanitizeObject, sanitizeString } from "../utils/sanitize.js";
 import { handleRouteError, getErrorMessage } from "../utils/errorHandler.js";
+import { sanitizeCityResponse } from "../utils/responseSanitizer.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -20,13 +21,17 @@ router.use(requireAdminOrSubAdmin);
 // Get all cities
 router.get("/", async (req, res) => {
   try {
-    const cities = await City.find().sort({ createdAt: -1 });
+    const cities = await City.find()
+      .select('-__v -createdAt -updatedAt')
+      .sort({ createdAt: -1 })
+      .lean();
     
-    // Convert S3 URLs to CloudFront URLs
-    const citiesWithCloudFrontUrls = cities.map(city => ({
-      ...city.toObject(),
-      backgroundImage: convertToCloudFrontUrl(city.backgroundImage)
-    }));
+    // Sanitize and convert S3 URLs to CloudFront URLs
+    const citiesWithCloudFrontUrls = cities.map(city => {
+      const sanitized = sanitizeCityResponse(city, req.user?.role);
+      sanitized.backgroundImage = convertToCloudFrontUrl(city.backgroundImage);
+      return sanitized;
+    });
     
     res.json(citiesWithCloudFrontUrls);
   } catch (error) {
@@ -73,18 +78,19 @@ router.get("/stats", async (req, res) => {
 // Get single city by ID
 router.get("/:id", async (req, res) => {
   try {
-    const city = await City.findById(req.params.id);
+    const city = await City.findById(req.params.id)
+      .select('-__v -createdAt -updatedAt')
+      .lean();
+    
     if (!city) {
       return res.status(404).json({ error: "City not found" });
     }
     
-    // Convert S3 URL to CloudFront URL
-    const cityWithCloudFrontUrl = {
-      ...city.toObject(),
-      backgroundImage: convertToCloudFrontUrl(city.backgroundImage)
-    };
+    // Sanitize and convert S3 URL to CloudFront URL
+    const sanitized = sanitizeCityResponse(city, req.user?.role);
+    sanitized.backgroundImage = convertToCloudFrontUrl(city.backgroundImage);
     
-    res.json(cityWithCloudFrontUrl);
+    res.json(sanitized);
   } catch (error) {
     logger.error("Error fetching city:", { error: error.message });
     res.status(500).json({ error: getErrorMessage(error, 'Failed to fetch city') });
@@ -136,15 +142,13 @@ router.post("/", upload.single("backgroundImage"), logActivity, async (req, res)
     // Update activity data with created city ID
     req.activityData.resourceId = city._id;
     
-    // Convert S3 URL to CloudFront URL for response
-    const cityWithCloudFrontUrl = {
-      ...city.toObject(),
-      backgroundImage: convertToCloudFrontUrl(city.backgroundImage)
-    };
+    // Sanitize, convert S3 URL to CloudFront URL for response
+    const sanitized = sanitizeCityResponse(city, req.user?.role);
+    sanitized.backgroundImage = convertToCloudFrontUrl(city.backgroundImage);
     
     res.status(201).json({
       success: true,
-      data: cityWithCloudFrontUrl,
+      data: sanitized,
       message: 'City created successfully'
     });
   } catch (error) {
@@ -196,11 +200,9 @@ router.put("/:id", upload.single("backgroundImage"), logActivity, async (req, re
       { new: true, runValidators: true }
     );
     
-    // Convert S3 URL to CloudFront URL for response
-    const cityWithCloudFrontUrl = {
-      ...city.toObject(),
-      backgroundImage: convertToCloudFrontUrl(city.backgroundImage)
-    };
+    // Sanitize, convert S3 URL to CloudFront URL for response
+    const sanitized = sanitizeCityResponse(city, req.user?.role);
+    sanitized.backgroundImage = convertToCloudFrontUrl(city.backgroundImage);
     
     // Set activity log data
     req.activityData = {
@@ -211,7 +213,7 @@ router.put("/:id", upload.single("backgroundImage"), logActivity, async (req, re
       severity: 'medium'
     };
 
-    res.json({ success: true, data: cityWithCloudFrontUrl, message: 'City updated successfully' });
+    res.json({ success: true, data: sanitized, message: 'City updated successfully' });
   } catch (error) {
     await handleRouteError(error, req, res, 'update_city', 'City', 400);
   }
@@ -287,7 +289,11 @@ router.post("/:id/localities", async (req, res) => {
     });
 
     await city.save();
-    res.json(city);
+    
+    // Sanitize response
+    const sanitized = sanitizeCityResponse(city, req.user?.role);
+    sanitized.backgroundImage = convertToCloudFrontUrl(city.backgroundImage);
+    res.json(sanitized);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -312,7 +318,11 @@ router.put("/:cityId/localities/:localityId", async (req, res) => {
     locality.isActive = isActive === "true" || isActive === true;
 
     await city.save();
-    res.json(city);
+    
+    // Sanitize response
+    const sanitized = sanitizeCityResponse(city, req.user?.role);
+    sanitized.backgroundImage = convertToCloudFrontUrl(city.backgroundImage);
+    res.json(sanitized);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -328,7 +338,11 @@ router.delete("/:cityId/localities/:localityId", async (req, res) => {
 
     city.localities.pull(req.params.localityId);
     await city.save();
-    res.json(city);
+    
+    // Sanitize response
+    const sanitized = sanitizeCityResponse(city, req.user?.role);
+    sanitized.backgroundImage = convertToCloudFrontUrl(city.backgroundImage);
+    res.json(sanitized);
   } catch (error) {
     logger.error("Error fetching city:", { error: error.message });
     res.status(500).json({ error: getErrorMessage(error, 'Failed to fetch city') });

@@ -5,6 +5,9 @@ import { authenticateJWT } from "../middleware/jwtAuth.js";
 import { requireUserManagementAccess } from "../middleware/roleAuth.js";
 import { escapeRegex } from "../utils/sanitize.js";
 import { logActivity } from "../middleware/activityLogger.js";
+import { sanitizeUserResponse, sanitizeArray } from "../utils/responseSanitizer.js";
+import logger from "../utils/logger.js";
+import { getErrorResponse } from "../utils/errorHandler.js";
 
 const router = express.Router();
 
@@ -43,19 +46,23 @@ router.get("/", logActivity, async (req, res) => {
     // Calculate pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // Get users with pagination
+    // Get users with pagination - exclude sensitive fields
     const users = await User.find(filter)
-      .select('-__v')
+      .select('-__v -lastActivity -permissions -watchlist -myProperties -profile -preferences')
       .sort({ lastLogin: -1, createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .lean();
     
     // Get total count for pagination
     const total = await User.countDocuments(filter);
     
+    // Sanitize all user responses - mask email and phone
+    const sanitizedUsers = sanitizeArray(users, sanitizeUserResponse, req.user?.role);
+    
     res.json({
       success: true,
-      data: users,
+      data: sanitizedUsers,
       pagination: {
         current: parseInt(page),
         pages: Math.ceil(total / parseInt(limit)),
@@ -63,11 +70,8 @@ router.get("/", logActivity, async (req, res) => {
       }
     });
   } catch (error) {
-    logger.error('Error fetching users:', { error: error.message });
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch users'
-    });
+    logger.error('Error fetching users:', { error: error.message, stack: error.stack });
+    res.status(500).json(getErrorResponse(error, 'Failed to fetch users'));
   }
 });
 
@@ -103,12 +107,11 @@ router.get("/stats", logActivity, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching user stats:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch user statistics',
-      details: error.message
+    logger.error('Error fetching user stats:', { 
+      error: error.message, 
+      stack: error.stack 
     });
+    res.status(500).json(getErrorResponse(error, 'Failed to fetch user statistics'));
   }
 });
 
@@ -210,19 +213,20 @@ router.get("/export", logActivity, async (req, res) => {
     res.end();
     
   } catch (error) {
-    console.error('Error exporting users:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to export users',
-      details: error.message
+    logger.error('Error exporting users:', { 
+      error: error.message, 
+      stack: error.stack 
     });
+    res.status(500).json(getErrorResponse(error, 'Failed to export users'));
   }
 });
 
 // GET /api/users/:id - Get single user
 router.get("/:id", logActivity, async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('-__v');
+    const user = await User.findById(req.params.id)
+      .select('-__v -lastActivity -permissions -watchlist -myProperties -profile -preferences')
+      .lean();
     
     if (!user) {
       return res.status(404).json({
@@ -231,17 +235,16 @@ router.get("/:id", logActivity, async (req, res) => {
       });
     }
     
+    // Sanitize user response
+    const sanitized = sanitizeUserResponse(user, req.user?.role);
+    
     res.json({
       success: true,
-      data: user
+      data: sanitized
     });
   } catch (error) {
-    console.error('Error fetching user:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch user',
-      details: error.message
-    });
+    logger.error('Error fetching user:', { error: error.message, stack: error.stack });
+    res.status(500).json(getErrorResponse(error, 'Failed to fetch user'));
   }
 });
 
@@ -251,17 +254,16 @@ router.post("/", logActivity, async (req, res) => {
     const user = new User(req.body);
     await user.save();
     
+    // Sanitize response
+    const sanitized = sanitizeUserResponse(user, req.user?.role);
+    
     res.status(201).json({
       success: true,
-      data: user
+      data: sanitized
     });
   } catch (error) {
-    console.error('Error creating user:', error);
-    res.status(400).json({
-      success: false,
-      error: 'Failed to create user',
-      details: error.message
-    });
+    logger.error('Error creating user:', { error: error.message, stack: error.stack });
+    res.status(400).json(getErrorResponse(error, 'Failed to create user'));
   }
 });
 
@@ -272,7 +274,9 @@ router.put("/:id", logActivity, async (req, res) => {
       req.params.id,
       req.body,
       { new: true, runValidators: true }
-    ).select('-__v');
+    )
+      .select('-__v -lastActivity -permissions -watchlist -myProperties -profile -preferences')
+      .lean();
     
     if (!user) {
       return res.status(404).json({
@@ -281,17 +285,16 @@ router.put("/:id", logActivity, async (req, res) => {
       });
     }
     
+    // Sanitize response
+    const sanitized = sanitizeUserResponse(user, req.user?.role);
+    
     res.json({
       success: true,
-      data: user
+      data: sanitized
     });
   } catch (error) {
-    console.error('Error updating user:', error);
-    res.status(400).json({
-      success: false,
-      error: 'Failed to update user',
-      details: error.message
-    });
+    logger.error('Error updating user:', { error: error.message, stack: error.stack });
+    res.status(400).json(getErrorResponse(error, 'Failed to update user'));
   }
 });
 
@@ -312,12 +315,11 @@ router.delete("/:id", logActivity, async (req, res) => {
       message: 'User deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting user:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to delete user',
-      details: error.message
+    logger.error('Error deleting user:', { 
+      error: error.message, 
+      stack: error.stack 
     });
+    res.status(500).json(getErrorResponse(error, 'Failed to delete user'));
   }
 });
 
