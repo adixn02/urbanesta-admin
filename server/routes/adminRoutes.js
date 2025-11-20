@@ -47,9 +47,9 @@ router.get('/users', requireAdmin, async (req, res) => {
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // Exclude sensitive fields - never expose phoneNumber, password, login data
+    // Exclude sensitive fields - but include phoneNumber for admin/subadmin visibility
     const users = await Admin.find(filter)
-      .select('-__v -password -phoneNumber -lastLogin -lastActivity -loginCount')
+      .select('-__v -password -lastLogin -lastActivity -loginCount')
       .populate('createdBy', 'name') // Only name, not phoneNumber
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -364,11 +364,39 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
     // Don't allow modifying protected super admins
     // Protected phone numbers: 9181989882098, 8198982098 (main admin), 9650089892 (Anil Mann - super admin)
     const user = await Admin.findById(userId);
-    const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
-    if (user && protectedPhones.includes(user.phoneNumber)) {
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Check by phone number - handle different formats (with/without +91, with/without country code)
+    const userPhone = user.phoneNumber ? user.phoneNumber.replace(/\D/g, '') : ''; // Remove all non-digits
+    const protectedPhones = ['9181989882098', '8198982098', '9650089892', '919181989882098', '91650089892'];
+    const protectedPhonesNormalized = protectedPhones.map(phone => phone.replace(/\D/g, ''));
+    
+    // Check if user's phone number (normalized) matches any protected phone number (normalized)
+    if (userPhone && protectedPhonesNormalized.some(phone => {
+      // Check exact match or match without country code prefix
+      return phone === userPhone || 
+             phone.endsWith(userPhone) || 
+             userPhone.endsWith(phone) ||
+             phone.replace(/^91/, '') === userPhone.replace(/^91/, '') ||
+             userPhone.replace(/^91/, '') === phone.replace(/^91/, '');
+    })) {
       return res.status(400).json({
         success: false,
         error: 'Cannot modify protected super admin account'
+      });
+    }
+    
+    // Additional specific check for phone number 9650089892 (in any format)
+    const normalizedUserPhone = userPhone.replace(/^\+?91/, '').replace(/^0/, '');
+    if (normalizedUserPhone === '9650089892' || userPhone === '9650089892' || userPhone === '919650089892') {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot modify protected super admin account (phone: 9650089892)'
       });
     }
     
@@ -390,7 +418,7 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
     
     const updateData = {};
     if (name) updateData.name = name;
-    if (email !== undefined) updateData.email = email;
+    // Note: email field is not in Admin schema, so we don't update it
     if (role) {
       updateData.role = role;
       updateData.isAdmin = role === 'admin';
@@ -408,16 +436,33 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
           error: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character'
         });
       }
-      updateData.password = password;
+      // Hash password before updating (findByIdAndUpdate doesn't trigger pre-save hooks)
+      const bcrypt = (await import('bcryptjs')).default;
+      const salt = await bcrypt.genSalt(10);
+      updateData.password = await bcrypt.hash(password, salt);
     }
     
-    const updatedUser = await Admin.findByIdAndUpdate(
-      userId,
-      updateData,
-      { new: true, runValidators: true }
-    )
-      .select('-__v -password -phoneNumber -lastLogin -lastActivity -loginCount')
-      .lean();
+    let updatedUser;
+    try {
+      updatedUser = await Admin.findByIdAndUpdate(
+        userId,
+        updateData,
+        { new: true, runValidators: true }
+      )
+        .select('-__v -password -lastActivity -loginCount')
+        .lean();
+    } catch (validationError) {
+      // Handle validation errors specifically
+      if (validationError.name === 'ValidationError') {
+        const errors = Object.values(validationError.errors).map(err => err.message).join(', ');
+        return res.status(400).json({
+          success: false,
+          error: `Validation error: ${errors}`
+        });
+      }
+      // Re-throw if it's not a validation error
+      throw validationError;
+    }
     
     if (!updatedUser) {
       return res.status(404).json({
@@ -426,18 +471,53 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
       });
     }
     
-    // Log activity (use phoneNumber from request or existing user, not from response)
-    const userForLog = await Admin.findById(userId).select('phoneNumber').lean();
-    req.activityData = {
-      action: 'update_user',
-      resource: 'User',
-      resourceId: updatedUser._id,
-      details: `Updated user: ${updatedUser.name}${userForLog?.phoneNumber ? ` (${userForLog.phoneNumber})` : ''}`,
-      severity: 'medium'
-    };
+    // Log activity (use phoneNumber from existing user, not from response)
+    try {
+      const userForLog = await Admin.findById(userId).select('phoneNumber').lean();
+      req.activityData = {
+        action: 'update_user',
+        resource: 'User',
+        resourceId: updatedUser._id,
+        details: `Updated user: ${updatedUser.name}${userForLog?.phoneNumber ? ` (${userForLog.phoneNumber})` : ''}`,
+        severity: 'medium'
+      };
+    } catch (logError) {
+      // If logging fails, continue anyway but log the error
+      logger.warn('Failed to prepare activity log for user update:', { error: logError.message });
+      req.activityData = {
+        action: 'update_user',
+        resource: 'User',
+        resourceId: updatedUser._id,
+        details: `Updated user: ${updatedUser.name}`,
+        severity: 'medium'
+      };
+    }
     
     // Sanitize response
-    const sanitized = sanitizeAdminResponse(updatedUser, req.user);
+    let sanitized;
+    try {
+      sanitized = sanitizeAdminResponse(updatedUser, req.user);
+      if (!sanitized) {
+        throw new Error('Sanitization returned null');
+      }
+    } catch (sanitizeError) {
+      logger.error('Error sanitizing admin response:', { 
+        error: sanitizeError.message,
+        stack: sanitizeError.stack,
+        updatedUser: updatedUser?._id
+      });
+      // Return unsanitized response as fallback (but still exclude sensitive fields)
+      sanitized = {
+        _id: updatedUser._id,
+        name: updatedUser.name,
+        role: updatedUser.role,
+        isActive: updatedUser.isActive,
+        permissions: updatedUser.permissions || [],
+        createdAt: updatedUser.createdAt,
+        ...(updatedUser.phoneNumber && { phoneNumber: updatedUser.phoneNumber }),
+        ...(updatedUser.lastLogin && { lastLogin: updatedUser.lastLogin })
+      };
+    }
     
     res.json({
       success: true,
@@ -445,10 +525,16 @@ router.put('/users/:id', requireAdmin, logActivity, async (req, res) => {
       message: 'User updated successfully'
     });
   } catch (error) {
-    logger.error('Error updating admin user:', { error: error.message });
+    logger.error('Error updating admin user:', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.params.id,
+      updateData: req.body
+    });
     res.status(500).json({
       success: false,
-      error: 'Failed to update admin user'
+      error: 'Failed to update admin user',
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
     });
   }
 });
@@ -471,11 +557,39 @@ router.delete('/users/:id', requireAdmin, logActivity, async (req, res) => {
     // Don't allow deleting protected super admins
     // Protected phone numbers: 9181989882098, 8198982098 (main admin), 9650089892 (Anil Mann - super admin)
     const user = await Admin.findById(userId);
-    const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
-    if (user && protectedPhones.includes(user.phoneNumber)) {
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Check by phone number - handle different formats (with/without +91, with/without country code)
+    const userPhone = user.phoneNumber ? user.phoneNumber.replace(/\D/g, '') : ''; // Remove all non-digits
+    const protectedPhones = ['9181989882098', '8198982098', '9650089892', '919181989882098', '91650089892'];
+    const protectedPhonesNormalized = protectedPhones.map(phone => phone.replace(/\D/g, ''));
+    
+    // Check if user's phone number (normalized) matches any protected phone number (normalized)
+    if (userPhone && protectedPhonesNormalized.some(phone => {
+      // Check exact match or match without country code prefix
+      return phone === userPhone || 
+             phone.endsWith(userPhone) || 
+             userPhone.endsWith(phone) ||
+             phone.replace(/^91/, '') === userPhone.replace(/^91/, '') ||
+             userPhone.replace(/^91/, '') === phone.replace(/^91/, '');
+    })) {
       return res.status(400).json({
         success: false,
         error: 'Cannot delete protected super admin account'
+      });
+    }
+    
+    // Additional specific check for phone number 9650089892 (in any format)
+    const normalizedUserPhone = userPhone.replace(/^\+?91/, '').replace(/^0/, '');
+    if (normalizedUserPhone === '9650089892' || userPhone === '9650089892' || userPhone === '919650089892') {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot delete protected super admin account (phone: 9650089892)'
       });
     }
     

@@ -126,13 +126,34 @@ const fetchUsersData = async () => {
   };
 
   const handleExport = async () => {
+    // Validate that both start and end dates are selected
+    if (!filters.fromDate || !filters.toDate) {
+      alert('Please select both start and end dates before downloading.');
+      return;
+    }
+
+    // Validate that end date is not in the future
+    const today = new Date();
+    const endDate = new Date(filters.toDate);
+    if (endDate > today) {
+      alert('End date cannot be in the future. Please select a date up to today.');
+      return;
+    }
+
+    // Validate that start date is not after end date
+    const startDate = new Date(filters.fromDate);
+    if (startDate > endDate) {
+      alert('Start date cannot be after end date.');
+      return;
+    }
+
     try {
       setIsExporting(true);
       
       // Build query parameters for export
       const queryParams = new URLSearchParams({
-        ...(filters.fromDate && { fromDate: filters.fromDate }),
-        ...(filters.toDate && { toDate: filters.toDate })
+        fromDate: filters.fromDate,
+        toDate: filters.toDate
       });
 
       const token = localStorage.getItem('token');
@@ -144,28 +165,46 @@ const fetchUsersData = async () => {
       });
       
       if (!response.ok) {
-        throw new Error('Export failed');
+        // Try to get error message from response
+        let errorMessage = 'Export failed';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.details || errorMessage;
+        } catch (e) {
+          errorMessage = `Export failed with status ${response.status}`;
+        }
+        throw new Error(errorMessage);
       }
 
-      // Get filename from response headers
-      const contentDisposition = response.headers.get('Content-Disposition');
-      const filename = contentDisposition 
-        ? contentDisposition.split('filename=')[1].replace(/"/g, '')
-        : 'users_report.xlsx';
+      // Check if response is actually an Excel file
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
+        // Get filename from response headers
+        const contentDisposition = response.headers.get('Content-Disposition');
+        const filename = contentDisposition 
+          ? contentDisposition.split('filename=')[1].replace(/"/g, '')
+          : `users-export-${filters.fromDate}-to-${filters.toDate}.xlsx`;
 
-      // Create blob and download
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+        // Create blob and download
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        alert('Users exported successfully!');
+      } else {
+        // If not Excel, try to parse as JSON to get error message
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.details || 'Invalid response from server');
+      }
       
     } catch (err) {
-      setError('Failed to export users. Please try again later.');
+      console.error('Error exporting users:', err);
+      alert(`Failed to export users: ${err.message}. Please try again or contact support if the issue persists.`);
     } finally {
       setIsExporting(false);
     }
@@ -197,30 +236,34 @@ const fetchUsersData = async () => {
       )}
 
       {/* Filter Controls */}
-      <div className="card mb-4">
-        <div className="card-header">
-          <h6 className="mb-0">Filter Users</h6>
-        </div>
+      <div className="card shadow-sm mb-4">
         <div className="card-body">
+          <h5 className="card-title mb-3">
+            <i className="bi bi-calendar-range me-2"></i>Filter Users by Date Range
+          </h5>
           <div className="row g-3">
             <div className="col-md-3">
-              <label htmlFor="fromDate" className="form-label">From Date</label>
+              <label htmlFor="fromDate" className="form-label">From Date <span className="text-danger">*</span></label>
               <input
                 type="date"
                 className="form-control"
                 id="fromDate"
                 value={filters.fromDate}
                 onChange={(e) => handleFilterChange('fromDate', e.target.value)}
+                max={new Date().toISOString().split('T')[0]}
+                required
               />
             </div>
             <div className="col-md-3">
-              <label htmlFor="toDate" className="form-label">To Date</label>
+              <label htmlFor="toDate" className="form-label">To Date <span className="text-danger">*</span></label>
               <input
                 type="date"
                 className="form-control"
                 id="toDate"
                 value={filters.toDate}
                 onChange={(e) => handleFilterChange('toDate', e.target.value)}
+                max={new Date().toISOString().split('T')[0]}
+                required
               />
             </div>
             <div className="col-md-6 d-flex align-items-end gap-2 justify-content-end">
@@ -234,7 +277,8 @@ const fetchUsersData = async () => {
               <button 
                 className="btn btn-success flex-grow-1" 
                 onClick={handleExport}
-                disabled={isExporting || loading}
+                disabled={isExporting || loading || !filters.fromDate || !filters.toDate}
+                title={!filters.fromDate || !filters.toDate ? "Please select both start and end dates" : ""}
               >
                 {isExporting ? (
                   <>
@@ -244,7 +288,7 @@ const fetchUsersData = async () => {
                 ) : (
                   <>
                     <i className="bi bi-download me-1"></i>
-                    Download Report
+                    Download Excel
                   </>
                 )}
               </button>

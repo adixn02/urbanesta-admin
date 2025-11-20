@@ -4,6 +4,7 @@ import Lead from "../models/Lead.js";
 import User from "../models/User.js";
 import Managedproperty from "../models/property.js";
 import XLSX from "xlsx";
+import mongoose from "mongoose";
 import { authenticateJWT } from "../middleware/jwtAuth.js";
 import { requireLeadsAccess } from "../middleware/roleAuth.js";
 import { escapeRegex } from "../utils/sanitize.js";
@@ -50,53 +51,147 @@ router.get("/export", logActivity, async (req, res) => {
     if (startDate || endDate) {
       filter.createdAt = {};
       if (startDate) {
-        filter.createdAt.$gte = new Date(startDate);
+        try {
+          const start = new Date(startDate);
+          if (!isNaN(start.getTime())) {
+            filter.createdAt.$gte = start;
+          }
+        } catch (e) {
+          logger.warn('Invalid startDate in export request:', startDate);
+        }
       }
       if (endDate) {
-        filter.createdAt.$lte = new Date(endDate + 'T23:59:59.999Z');
+        try {
+          // Ensure endDate includes the full day (23:59:59.999)
+          const end = new Date(endDate);
+          if (!isNaN(end.getTime())) {
+            // Set to end of day
+            end.setHours(23, 59, 59, 999);
+            filter.createdAt.$lte = end;
+          }
+        } catch (e) {
+          logger.warn('Invalid endDate in export request:', endDate);
+        }
       }
     }
     
     // Get all leads matching the filter (no pagination for export)
     // For export, we need full data but still exclude metadata
-    const leads = await Lead.find(filter)
+    // Fetch leads first, then batch populate only valid ObjectIds to avoid CastError
+    let leads = await Lead.find(filter)
       .select('-__v -metadata') // Exclude metadata but keep email/phone for export
-      .populate({
-        path: 'assignedTo',
-        select: 'name',
-        model: 'User'
-      })
-      .populate({
-        path: 'propertyInterest',
-        select: 'title projectName location fullAddress type',
-        model: 'Managedproperty'
-      })
       .sort({ createdAt: -1 })
       .lean();
     
+    // Collect all unique valid ObjectIds for batch population
+    const validAssignedToIds = new Set();
+    const validPropertyInterestIds = new Set();
+    
+    leads.forEach(lead => {
+      if (lead.assignedTo && mongoose.Types.ObjectId.isValid(lead.assignedTo)) {
+        validAssignedToIds.add(lead.assignedTo.toString());
+      }
+      if (lead.propertyInterest && mongoose.Types.ObjectId.isValid(lead.propertyInterest)) {
+        validPropertyInterestIds.add(lead.propertyInterest.toString());
+      }
+    });
+    
+    // Batch fetch all users and properties in parallel
+    const [usersMap, propertiesMap] = await Promise.all([
+      validAssignedToIds.size > 0 
+        ? User.find({ _id: { $in: Array.from(validAssignedToIds).map(id => new mongoose.Types.ObjectId(id)) } })
+            .select('name')
+            .lean()
+            .then(users => {
+              const map = new Map();
+              users.forEach(user => map.set(user._id.toString(), user));
+              return map;
+            })
+            .catch(() => new Map())
+        : Promise.resolve(new Map()),
+      validPropertyInterestIds.size > 0
+        ? Managedproperty.find({ _id: { $in: Array.from(validPropertyInterestIds).map(id => new mongoose.Types.ObjectId(id)) } })
+            .select('title projectName location fullAddress type')
+            .lean()
+            .then(properties => {
+              const map = new Map();
+              properties.forEach(property => map.set(property._id.toString(), property));
+              return map;
+            })
+            .catch(() => new Map())
+        : Promise.resolve(new Map())
+    ]);
+    
+    // Map populated data back to leads
+    const leadsWithPopulate = leads.map(lead => {
+      const populatedLead = { ...lead };
+      
+      // Populate assignedTo
+      if (lead.assignedTo && mongoose.Types.ObjectId.isValid(lead.assignedTo)) {
+        populatedLead.assignedTo = usersMap.get(lead.assignedTo.toString()) || null;
+      } else {
+        populatedLead.assignedTo = null;
+      }
+      
+      // Populate propertyInterest
+      if (lead.propertyInterest && mongoose.Types.ObjectId.isValid(lead.propertyInterest)) {
+        populatedLead.propertyInterest = propertiesMap.get(lead.propertyInterest.toString()) || null;
+      } else {
+        // If not a valid ObjectId, keep as is (might be stored as propertyName)
+        populatedLead.propertyInterest = null;
+      }
+      
+      return populatedLead;
+    });
+    
     // Prepare data for Excel - include all fields as they are stored
     // Note: Export contains full email/phone for business use, but API responses are masked
-    const excelData = leads.map(lead => ({
-      'Name': lead.name || '',
-      'Email': lead.email || '',
-      'Phone': lead.phone || '',
-      'City': lead.city || '',
-      'Property Interested': lead.propertyName || '',
-      'Property ID': lead.propertyId || '',
-      'Property URL': lead.propertyUrl || '',
-      'Form Type': lead.formType ? lead.formType.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '',
-      'Status': lead.status ? lead.status.replace(/\b\w/g, l => l.toUpperCase()) : '',
-      'Priority': lead.priority ? lead.priority.replace(/\b\w/g, l => l.toUpperCase()) : '',
-      'Source': lead.source ? lead.source.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '',
-      'Message': lead.message || '',
-      'Assigned To': lead.assignedTo ? (lead.assignedTo.name || '') : '',
-      'Tags': lead.tags && lead.tags.length > 0 ? lead.tags.join(', ') : '',
-      'Follow Up Date': lead.followUpDate ? new Date(lead.followUpDate).toLocaleDateString() : '',
-      // Excluded: IP Address and User Agent for security
-      'Is Active': lead.isActive ? 'Yes' : 'No',
-      'Created At': lead.createdAt ? new Date(lead.createdAt).toLocaleString() : '',
-      'Updated At': lead.updatedAt ? new Date(lead.updatedAt).toLocaleString() : ''
-    }));
+    const excelData = leadsWithPopulate.map(lead => {
+      // Safely handle dates
+      const formatDate = (date) => {
+        if (!date) return '';
+        try {
+          const d = new Date(date);
+          if (isNaN(d.getTime())) return '';
+          return d.toLocaleDateString();
+        } catch (e) {
+          return '';
+        }
+      };
+      
+      const formatDateTime = (date) => {
+        if (!date) return '';
+        try {
+          const d = new Date(date);
+          if (isNaN(d.getTime())) return '';
+          return d.toLocaleString();
+        } catch (e) {
+          return '';
+        }
+      };
+      
+      return {
+        'Name': lead.name || '',
+        'Email': lead.email || '',
+        'Phone': lead.phone || '',
+        'City': lead.city || '',
+        'Property Interested': lead.propertyName || lead.propertyInterest?.title || lead.propertyInterest?.projectName || '',
+        'Property ID': lead.propertyId || '',
+        'Property URL': lead.propertyUrl || '',
+        'Form Type': lead.formType ? lead.formType.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '',
+        'Status': lead.status ? lead.status.replace(/\b\w/g, l => l.toUpperCase()) : '',
+        'Priority': lead.priority ? lead.priority.replace(/\b\w/g, l => l.toUpperCase()) : '',
+        'Source': lead.source ? lead.source.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '',
+        'Message': lead.message || '',
+        'Assigned To': (lead.assignedTo && typeof lead.assignedTo === 'object' && lead.assignedTo.name) ? lead.assignedTo.name : '',
+        'Tags': lead.tags && Array.isArray(lead.tags) && lead.tags.length > 0 ? lead.tags.join(', ') : '',
+        'Follow Up Date': formatDate(lead.followUpDate),
+        // Excluded: IP Address and User Agent for security
+        'Is Active': lead.isActive !== undefined && lead.isActive !== null ? (lead.isActive ? 'Yes' : 'No') : 'Yes',
+        'Created At': formatDateTime(lead.createdAt),
+        'Updated At': formatDateTime(lead.updatedAt)
+      };
+    });
     
     // Create workbook and worksheet
     const workbook = XLSX.utils.book_new();
@@ -209,34 +304,73 @@ router.get("/", logActivity, async (req, res) => {
     
     // Get leads with pagination and populate references
     // Exclude sensitive metadata (IP, user agent) from query
-    let leads;
-    try {
-      leads = await Lead.find(filter)
-        .select('-__v -metadata')
-        .populate({
-          path: 'assignedTo',
-          select: 'name',
-          model: 'User' // Explicitly specify the model
-        })
-        .populate({
-          path: 'propertyInterest',
-          select: 'title projectName location fullAddress type',
-          model: 'Managedproperty' // Explicitly specify the model
-        })
-        .sort(sort)
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean();
-    } catch (populateError) {
-      // If populate fails, try without populate
-      logger.warn('Populate failed, fetching leads without populate:', { error: populateError.message });
-      leads = await Lead.find(filter)
-        .select('-__v -metadata')
-        .sort(sort)
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean();
-    }
+    // Fetch leads first, then batch populate only valid ObjectIds to avoid CastError
+    let leads = await Lead.find(filter)
+      .select('-__v -metadata')
+      .sort(sort)
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+    
+    // Collect all unique valid ObjectIds for batch population
+    const validAssignedToIds = new Set();
+    const validPropertyInterestIds = new Set();
+    
+    leads.forEach(lead => {
+      if (lead.assignedTo && mongoose.Types.ObjectId.isValid(lead.assignedTo)) {
+        validAssignedToIds.add(lead.assignedTo.toString());
+      }
+      if (lead.propertyInterest && mongoose.Types.ObjectId.isValid(lead.propertyInterest)) {
+        validPropertyInterestIds.add(lead.propertyInterest.toString());
+      }
+    });
+    
+    // Batch fetch all users and properties in parallel
+    const [usersMap, propertiesMap] = await Promise.all([
+      validAssignedToIds.size > 0 
+        ? User.find({ _id: { $in: Array.from(validAssignedToIds).map(id => new mongoose.Types.ObjectId(id)) } })
+            .select('name')
+            .lean()
+            .then(users => {
+              const map = new Map();
+              users.forEach(user => map.set(user._id.toString(), user));
+              return map;
+            })
+            .catch(() => new Map())
+        : Promise.resolve(new Map()),
+      validPropertyInterestIds.size > 0
+        ? Managedproperty.find({ _id: { $in: Array.from(validPropertyInterestIds).map(id => new mongoose.Types.ObjectId(id)) } })
+            .select('title projectName location fullAddress type')
+            .lean()
+            .then(properties => {
+              const map = new Map();
+              properties.forEach(property => map.set(property._id.toString(), property));
+              return map;
+            })
+            .catch(() => new Map())
+        : Promise.resolve(new Map())
+    ]);
+    
+    // Map populated data back to leads
+    leads = leads.map(lead => {
+      const populatedLead = { ...lead };
+      
+      // Populate assignedTo
+      if (lead.assignedTo && mongoose.Types.ObjectId.isValid(lead.assignedTo)) {
+        populatedLead.assignedTo = usersMap.get(lead.assignedTo.toString()) || null;
+      } else {
+        populatedLead.assignedTo = null;
+      }
+      
+      // Populate propertyInterest
+      if (lead.propertyInterest && mongoose.Types.ObjectId.isValid(lead.propertyInterest)) {
+        populatedLead.propertyInterest = propertiesMap.get(lead.propertyInterest.toString()) || null;
+      } else {
+        populatedLead.propertyInterest = null;
+      }
+      
+      return populatedLead;
+    });
     
     // Get total count for pagination
     const total = await Lead.countDocuments(filter);
@@ -324,18 +458,8 @@ router.get("/stats", logActivity, async (req, res) => {
 // GET /api/leads/:id - Get single lead
 router.get("/:id", logActivity, async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id)
+    let lead = await Lead.findById(req.params.id)
       .select('-__v -metadata') // Exclude metadata (IP, user agent)
-      .populate({
-        path: 'assignedTo',
-        select: 'name',
-        model: 'User'
-      })
-      .populate({
-        path: 'propertyInterest',
-        select: 'title projectName location fullAddress type',
-        model: 'Managedproperty'
-      })
       .lean();
     
     if (!lead) {
@@ -343,6 +467,31 @@ router.get("/:id", logActivity, async (req, res) => {
         success: false,
         error: 'Lead not found'
       });
+    }
+    
+    // Manually populate only valid ObjectIds to avoid CastError
+    if (lead.assignedTo && mongoose.Types.ObjectId.isValid(lead.assignedTo)) {
+      try {
+        const user = await User.findById(lead.assignedTo).select('name').lean();
+        lead.assignedTo = user;
+      } catch (e) {
+        lead.assignedTo = null;
+      }
+    } else if (lead.assignedTo) {
+      lead.assignedTo = null;
+    }
+    
+    if (lead.propertyInterest && mongoose.Types.ObjectId.isValid(lead.propertyInterest)) {
+      try {
+        const property = await Managedproperty.findById(lead.propertyInterest)
+          .select('title projectName location fullAddress type')
+          .lean();
+        lead.propertyInterest = property;
+      } catch (e) {
+        lead.propertyInterest = null;
+      }
+    } else if (lead.propertyInterest) {
+      lead.propertyInterest = null;
     }
     
     // Sanitize lead response - mask email and phone

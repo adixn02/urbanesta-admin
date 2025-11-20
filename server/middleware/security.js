@@ -36,27 +36,34 @@ export const securityConfig = {
     // General API rate limiting
     general: rateLimit({
       windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-      max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 200,
+      max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 1000, // Increased to 1000 for admin panel usage
       message: {
         error: "Too many requests from this IP, please try again later.",
         retryAfter: Math.ceil((parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000) / 1000)
       },
       standardHeaders: true,
       legacyHeaders: false,
-      skip: (req) => req.path === '/healthz'
+      skip: (req) => {
+        // Skip rate limiting for health checks and export endpoints (they're already protected by auth)
+        return req.path === '/healthz' || req.path.includes('/export');
+      }
       // Note: trust proxy is set on Express app, not here
     }),
 
-    // Strict rate limiting for sensitive endpoints
+    // Strict rate limiting for sensitive endpoints (increased for admin panel usage)
     strict: rateLimit({
       windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-      max: parseInt(process.env.RATE_LIMIT_STRICT_MAX) || 20,
+      max: parseInt(process.env.RATE_LIMIT_STRICT_MAX) || 300, // Increased from 20 to 300 for admin panel
       message: {
         error: "Rate limit exceeded for this endpoint. Please try again later.",
         retryAfter: Math.ceil((parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000) / 1000)
       },
       standardHeaders: true,
-      legacyHeaders: false
+      legacyHeaders: false,
+      skip: (req) => {
+        // Skip rate limiting for export endpoints (they're already protected by auth and are long-running)
+        return req.path.includes('/export');
+      }
       // Note: trust proxy is set on Express app, not here
     }),
 
@@ -84,6 +91,22 @@ export const securityConfig = {
       standardHeaders: true,
       legacyHeaders: false
       // Note: trust proxy is set on Express app, not here
+    }),
+
+    // Admin panel rate limiting (higher limits for authenticated admin users)
+    adminPanel: rateLimit({
+      windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+      max: parseInt(process.env.RATE_LIMIT_ADMIN_MAX) || 500, // Higher limit for admin panel usage
+      message: {
+        error: "Rate limit exceeded. Please try again later.",
+        retryAfter: Math.ceil((parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000) / 1000)
+      },
+      standardHeaders: true,
+      legacyHeaders: false,
+      skip: (req) => {
+        // Skip rate limiting for export endpoints and health checks
+        return req.path === '/healthz' || req.path.includes('/export');
+      }
     })
   }
 };

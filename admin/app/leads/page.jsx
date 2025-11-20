@@ -205,23 +205,39 @@ const handleSignOut = async () => {
       });
       
       if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = `leads-export-${filters.startDate}-to-${filters.endDate}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        alert('Leads exported successfully!');
+        // Check if response is actually an Excel file
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = `leads-export-${filters.startDate}-to-${filters.endDate}.xlsx`;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          alert('Leads exported successfully!');
+        } else {
+          // If not Excel, try to parse as JSON to get error message
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || errorData.details || 'Invalid response from server');
+        }
       } else {
-        throw new Error('Export failed');
+        // Try to get error message from response
+        let errorMessage = 'Export failed';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.details || errorMessage;
+        } catch (e) {
+          errorMessage = `Export failed with status ${response.status}`;
+        }
+        throw new Error(errorMessage);
       }
     } catch (error) {
       console.error('Error exporting leads:', error);
-      alert('Failed to export leads. Please try again.');
+      alert(`Failed to export leads: ${error.message}. Please try again or contact support if the issue persists.`);
     } finally {
       setExportLoading(false);
     }

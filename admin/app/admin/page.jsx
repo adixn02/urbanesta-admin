@@ -481,7 +481,7 @@ export default function Admin() {
           <Header toggleSidebar={toggleSidebar} handleSignOut={handleSignOut} />
           <main className="p-4 pt-5 mt-5">
         <div className="d-flex justify-content-between align-items-center mb-4">
-          <h2 className='fw-bold'>Welcome to Proprty Management System</h2>
+          <h2 className='fw-bold'>Welcome to Property Management System</h2>
           <div className="d-flex gap-2">
             <button 
               className="btn btn-info btn-sm text-white"

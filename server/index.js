@@ -187,10 +187,10 @@ app.use("/api/2factor", twoFactorAuthRoutes); // Public - for login OTP
 app.use("/api/auth", authRoutes); // Public - for authentication
 
 // PROTECTED ROUTES (AUTHENTICATION REQUIRED)
-// Apply strict rate limiting to sensitive endpoints to prevent data scraping
-app.use("/api/admin", securityConfig.rateLimits.strict, adminRoutes); // Protected - has authenticateJWT middleware
-app.use("/api/leads", securityConfig.rateLimits.strict, leadRoutes); // Strict rate limit for leads (PII)
-app.use("/api/users", securityConfig.rateLimits.strict, userRoutes); // Strict rate limit for user data
+// Apply admin panel rate limiting (higher limits for authenticated users)
+app.use("/api/admin", securityConfig.rateLimits.adminPanel, adminRoutes); // Protected - has authenticateJWT middleware
+app.use("/api/leads", securityConfig.rateLimits.adminPanel, leadRoutes); // Admin panel rate limit for leads
+app.use("/api/users", securityConfig.rateLimits.adminPanel, userRoutes); // Admin panel rate limit for user data
 
 app.use("/api/builders", builderRoutes);
 app.use("/api/categories", categoryRoutes);

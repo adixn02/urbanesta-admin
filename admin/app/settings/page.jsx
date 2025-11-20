@@ -45,8 +45,6 @@ export default function Settings() {
   const [showAddAdminModal, setShowAddAdminModal] = useState(false);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
-  const [blockedIPs, setBlockedIPs] = useState([]);
-  const [loadingBlockedIPs, setLoadingBlockedIPs] = useState(false);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
 
@@ -68,20 +66,12 @@ export default function Settings() {
   useEffect(() => {
     fetchUsersData();
     fetchStats();
-    fetchBlockedIPs();
     
     // Get current user from localStorage
     const storedUser = localStorage.getItem('user');
     if (storedUser) {
       setCurrentUser(JSON.parse(storedUser));
     }
-    
-    // Refresh blocked IPs every 30 seconds
-    const interval = setInterval(() => {
-      fetchBlockedIPs();
-    }, 30000);
-    
-    return () => clearInterval(interval);
   }, []);
 
   const fetchUsersData = async () => {
@@ -125,59 +115,6 @@ export default function Settings() {
     }
   };
 
-  const fetchBlockedIPs = async () => {
-    try {
-      setLoadingBlockedIPs(true);
-      const response = await fetch(`${API_BASE_URL}/api/admin/blocked-ips`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setBlockedIPs(data.data || []);
-      }
-    } catch (error) {
-      logger.error('Error fetching blocked IPs:', { error: error.message });
-    } finally {
-      setLoadingBlockedIPs(false);
-    }
-  };
-
-  const handleReleaseIP = async (ip) => {
-    if (!confirm(`Are you sure you want to release IP ${ip}? This will allow them to access the admin panel again.`)) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError('');
-      
-      const response = await fetch(`${API_BASE_URL}/api/admin/blocked-ips/release`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ ip })
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        setSuccess(`IP ${ip} has been released successfully`);
-        fetchBlockedIPs(); // Refresh the list
-      } else {
-        setError(data.error || 'Failed to release IP');
-      }
-    } catch (error) {
-      setError('Failed to release IP: ' + error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleAddUser = async (e) => {
     e.preventDefault();
@@ -343,12 +280,30 @@ export default function Settings() {
     const userName = user?.name || 'this user';
     const userRole = user?.role === 'admin' ? 'Admin' : 'Subadmin';
     
-    // Extra protection for protected super admins
+    // Extra protection for protected super admins - check by phone number (not by name)
     // Protected phone numbers: 9181989882098, 8198982098 (main admin), 9650089892 (Anil Mann - super admin)
-    const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
-    if (user && protectedPhones.includes(user.phoneNumber)) {
-      setError('Cannot delete protected super admin account!');
-      return;
+    if (user && user.phoneNumber) {
+      // Normalize phone number (remove all non-digits)
+      const userPhone = user.phoneNumber.replace(/\D/g, '');
+      const protectedPhones = ['9181989882098', '8198982098', '9650089892', '919181989882098', '91650089892'];
+      const protectedPhonesNormalized = protectedPhones.map(phone => phone.replace(/\D/g, ''));
+      
+      // Check if user's phone number matches any protected phone number (handling different formats)
+      const isProtected = protectedPhonesNormalized.some(phone => {
+        // Check exact match or match without country code prefix
+        return phone === userPhone || 
+               phone.endsWith(userPhone) || 
+               userPhone.endsWith(phone) ||
+               phone.replace(/^91/, '') === userPhone.replace(/^91/, '') ||
+               userPhone.replace(/^91/, '') === phone.replace(/^91/, '');
+      });
+      
+      // Additional specific check for phone number 9650089892 (in any format)
+      const normalizedUserPhone = userPhone.replace(/^\+?91/, '').replace(/^0/, '');
+      if (normalizedUserPhone === '9650089892' || userPhone === '9650089892' || userPhone === '919650089892' || isProtected) {
+        setError('Cannot delete protected super admin account! (Phone: ' + user.phoneNumber + ')');
+        return;
+      }
     }
     
     // Prevent deleting yourself (currently logged-in user)
@@ -408,6 +363,19 @@ export default function Settings() {
     // Find the user being toggled to check phone number as well
     const targetUser = users.find(u => u._id?.toString() === targetUserId);
     
+    // Protect super admin with phone number 9650089892 from being deactivated
+    if (targetUser && targetUser.phoneNumber) {
+      const userPhone = targetUser.phoneNumber.replace(/\D/g, '');
+      const normalizedUserPhone = userPhone.replace(/^\+?91/, '').replace(/^0/, '');
+      
+      // Check if this is the protected admin (phone: 9650089892)
+      if (normalizedUserPhone === '9650089892' || userPhone === '9650089892' || userPhone === '919650089892') {
+        setError('Cannot deactivate protected super admin account! (Phone: ' + targetUser.phoneNumber + ')');
+        setLoading(false);
+        return;
+      }
+    }
+    
     // Check by ID
     if (currentUser && currentUserId === targetUserId && currentStatus === true) {
       setError('You cannot deactivate your own account. Please ask another admin to deactivate your account if needed.');
@@ -439,10 +407,16 @@ export default function Settings() {
         fetchUsersData();
         fetchStats();
       } else {
-        setError(data.error || 'Failed to update user status');
+        setError(data.error || data.message || 'Failed to update user status');
       }
     } catch (error) {
-      setError('Failed to update user status: ' + error.message);
+      // If response is not JSON, try to get error message
+      if (error.message.includes('JSON')) {
+        setError('Failed to update user status. Server returned an invalid response.');
+      } else {
+        setError('Failed to update user status: ' + error.message);
+      }
+      console.error('Error toggling user status:', error);
     } finally {
       setLoading(false);
     }
@@ -835,11 +809,23 @@ export default function Settings() {
                             </td>
                             <td>
                               {(() => {
-                                // Protected super admin phone numbers
-                                const protectedPhones = ['9181989882098', '8198982098', '9650089892'];
-                                const isProtected = protectedPhones.includes(user.phoneNumber);
+                                // Protected super admin phone numbers - check with normalization like backend
+                                const userPhone = user.phoneNumber ? user.phoneNumber.replace(/\D/g, '') : '';
+                                const protectedPhones = ['9181989882098', '8198982098', '9650089892', '919181989882098', '91650089892'];
+                                const protectedPhonesNormalized = protectedPhones.map(phone => phone.replace(/\D/g, ''));
+                                
+                                // Check if user's phone matches any protected phone (with normalization)
+                                const isProtected = userPhone && protectedPhonesNormalized.some(phone => {
+                                  return phone === userPhone || 
+                                         phone.endsWith(userPhone) || 
+                                         userPhone.endsWith(phone) ||
+                                         phone.replace(/^91/, '') === userPhone.replace(/^91/, '') ||
+                                         userPhone.replace(/^91/, '') === phone.replace(/^91/, '');
+                                });
+                                
                                 const isCurrentUser = currentUser && (user._id?.toString() === currentUser._id?.toString() || user.phoneNumber === currentUser.phoneNumber);
                                 
+                                // For admin users, don't show action button - only show status
                                 if (isProtected) {
                                   return (
                                     <span className="badge bg-secondary">
@@ -851,19 +837,16 @@ export default function Settings() {
                                   return (
                                     <span className="badge bg-info">
                                       <i className="bi bi-person-check me-1"></i>
-                                      You (Cannot deactivate)
+                                      You
                                     </span>
                                   );
                                 } else {
+                                  // No action button for admin users
                                   return (
-                                    <button
-                                      className="btn btn-sm btn-outline-primary"
-                                      onClick={() => toggleUserStatus(user._id, user.isActive)}
-                                      title={user.isActive ? 'Deactivate Admin' : 'Activate Admin'}
-                                    >
-                                      <i className={`bi ${user.isActive ? 'bi-pause-circle' : 'bi-play-circle'} me-1`}></i>
-                                      {user.isActive ? 'Deactivate' : 'Activate'}
-                                    </button>
+                                    <span className="badge bg-secondary">
+                                      <i className="bi bi-shield me-1"></i>
+                                      Admin
+                                    </span>
                                   );
                                 }
                               })()}
@@ -871,105 +854,6 @@ export default function Settings() {
                           </tr>
                         ))
                       )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Blocked IPs Table */}
-          <div className="card mb-4">
-            <div className="card-header bg-danger text-white">
-              <div className="d-flex justify-content-between align-items-center">
-                <h5 className="mb-0">
-                  <i className="bi bi-shield-exclamation me-2"></i>
-                  Blocked IP Addresses (Unknown Guests)
-                </h5>
-                <button 
-                  className="btn btn-sm btn-light"
-                  onClick={fetchBlockedIPs}
-                  disabled={loadingBlockedIPs}
-                >
-                  <i className={`bi ${loadingBlockedIPs ? 'bi-arrow-clockwise' : 'bi-arrow-clockwise'} me-1 ${loadingBlockedIPs ? 'spinner-border spinner-border-sm' : ''}`}></i>
-                  Refresh
-                </button>
-              </div>
-            </div>
-            <div className="card-body">
-              {loadingBlockedIPs ? (
-                <div className="text-center py-4">
-                  <div className="spinner-border text-danger" role="status">
-                    <span className="visually-hidden">Loading...</span>
-                  </div>
-                </div>
-              ) : blockedIPs.length === 0 ? (
-                <div className="text-center py-4 text-muted">
-                  <i className="bi bi-shield-check fs-1 d-block mb-2 text-success"></i>
-                  <p className="mb-0">No blocked IP addresses. All clear! 🎉</p>
-                </div>
-              ) : (
-                <div className="table-responsive">
-                  <table className="table table-hover">
-                    <thead>
-                      <tr>
-                        <th>IP Address</th>
-                        <th>Attempts</th>
-                        <th>Blocked At</th>
-                        <th>Last Attempt</th>
-                        <th>Reason</th>
-                        <th>Remaining Time</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {blockedIPs.map((blockedIP) => (
-                        <tr key={blockedIP.ip}>
-                          <td>
-                            <code className="text-danger fw-bold">{blockedIP.ip}</code>
-                          </td>
-                          <td>
-                            <span className="badge bg-danger">{blockedIP.attempts}</span>
-                          </td>
-                          <td>
-                            {blockedIP.blockedAt 
-                              ? new Date(blockedIP.blockedAt).toLocaleString()
-                              : 'N/A'
-                            }
-                          </td>
-                          <td>
-                            {blockedIP.lastAttempt 
-                              ? new Date(blockedIP.lastAttempt).toLocaleString()
-                              : 'N/A'
-                            }
-                          </td>
-                          <td>
-                            <small className="text-muted">{blockedIP.reason}</small>
-                          </td>
-                          <td>
-                            {blockedIP.remainingHours > 0 ? (
-                              <span className="badge bg-warning text-dark">
-                                {blockedIP.remainingHours}h {blockedIP.remainingMinutes % 60}m
-                              </span>
-                            ) : (
-                              <span className="badge bg-info">
-                                {blockedIP.remainingMinutes}m
-                              </span>
-                            )}
-                          </td>
-                          <td>
-                            <button
-                              className="btn btn-sm btn-success"
-                              onClick={() => handleReleaseIP(blockedIP.ip)}
-                              disabled={loading}
-                              title="Release this IP address"
-                            >
-                              <i className="bi bi-unlock me-1"></i>
-                              Release
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
                     </tbody>
                   </table>
                 </div>

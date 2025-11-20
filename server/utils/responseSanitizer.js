@@ -118,8 +118,10 @@ export const sanitizeAdminResponse = (admin, requestingUser = null) => {
   
   // Only if requesting user is admin and viewing their own profile or another admin
   if (requestingUser && requestingUser.role === 'admin') {
-    // Admins can see more details but still not sensitive data
-    response.updatedAt = sanitized.updatedAt;
+    // Admins can see more details including phone numbers for admin/subadmin management
+    if (sanitized.updatedAt) response.updatedAt = sanitized.updatedAt;
+    if (sanitized.phoneNumber) response.phoneNumber = sanitized.phoneNumber; // Include phone number for admin/subadmin visibility
+    if (sanitized.lastLogin) response.lastLogin = sanitized.lastLogin; // Include last login for admin management
     
     // Only show createdBy name, not full details
     if (sanitized.createdBy && typeof sanitized.createdBy === 'object') {
@@ -133,7 +135,7 @@ export const sanitizeAdminResponse = (admin, requestingUser = null) => {
     }
   }
   
-  // Excluded: phoneNumber, password, lastLogin, lastActivity, loginCount, email
+  // Excluded: password, lastActivity, loginCount, email (phoneNumber is included for admin role)
   return response;
 };
 
