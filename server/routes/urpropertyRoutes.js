@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import Managedproperty from '../models/property.js';
 import Category from '../models/category.js';
 import City from '../models/City.js';
@@ -85,6 +86,48 @@ router.get('/', async (req, res) => {
   try {
     const { type, status, city, category, subcategory, name, builder, page = 1, limit = 50 } = req.query;
     
+    // Validate ObjectId parameters
+    if (city && !mongoose.Types.ObjectId.isValid(city)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid city ID format'
+      });
+    }
+    if (category && !mongoose.Types.ObjectId.isValid(category)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid category ID format'
+      });
+    }
+    if (builder && !mongoose.Types.ObjectId.isValid(builder)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid builder ID format'
+      });
+    }
+    if (subcategory && !mongoose.Types.ObjectId.isValid(subcategory)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid subcategory ID format'
+      });
+    }
+    
+    // Validate pagination parameters
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    if (isNaN(pageNum) || pageNum < 1) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid page number'
+      });
+    }
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid limit (must be between 1 and 100)'
+      });
+    }
+    
     // Build filter object
     const filter = {};
     if (type) filter.type = type;
@@ -109,7 +152,7 @@ router.get('/', async (req, res) => {
     }
     
     // Calculate pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
     
     // Get properties with pagination and populate references
     const properties = await Managedproperty.find(filter)
@@ -118,7 +161,7 @@ router.get('/', async (req, res) => {
       .populate('builder', 'name slug')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(limitNum);
     
     // Convert to plain objects and add display images with CloudFront URLs
     const propertiesWithSubcategoryNames = properties.map(property => {
@@ -208,13 +251,18 @@ router.get('/', async (req, res) => {
       success: true,
       data: propertiesWithSubcategoryNames,
       pagination: {
-        current: parseInt(page),
-        pages: Math.ceil(total / parseInt(limit)),
+        current: pageNum,
+        pages: Math.ceil(total / limitNum),
         total,
-        limit: parseInt(limit)
+        limit: limitNum
       }
     });
   } catch (error) {
+    logger.error('Error fetching properties:', {
+      error: error.message,
+      stack: error.stack,
+      query: req.query
+    });
     handleRouteError(error, res, 'Failed to fetch properties');
   }
 });
@@ -421,6 +469,37 @@ router.post('/', logActivity, async (req, res) => {
       message: 'Property created successfully'
     });
   } catch (error) {
+    // Log detailed error for debugging
+    logger.error('Error creating property:', {
+      error: error.message,
+      stack: error.stack,
+      propertyData: {
+        type: req.body?.type,
+        city: req.body?.city,
+        category: req.body?.category,
+        subcategory: req.body?.subcategory,
+        title: req.body?.title,
+        projectName: req.body?.projectName
+      }
+    });
+    
+    // Handle specific MongoDB validation errors
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors || {}).map(err => err.message).join(', ');
+      return res.status(400).json({
+        success: false,
+        error: `Validation failed: ${validationErrors}`
+      });
+    }
+    
+    // Handle MongoDB cast errors (invalid ObjectId)
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid ${error.path} format: ${error.value}`
+      });
+    }
+    
     await handleRouteError(error, req, res, 'create_property', 'Property', 400);
   }
 });

@@ -2,6 +2,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { body, validationResult } from 'express-validator';
 import csurf from '@dr.pogodin/csurf';
+import logger from '../utils/logger.js';
 
 // Security middleware configuration
 export const securityConfig = {
@@ -113,25 +114,63 @@ export const securityConfig = {
 
 // Request validation middleware
 export const validateRequest = (req, res, next) => {
-  // Check for suspicious patterns
-  const suspiciousPatterns = [
-    /\.\./,  // Directory traversal
-    /<script/i,  // XSS attempts
-    /union.*select/i,  // SQL injection
-    /javascript:/i,  // JavaScript injection
-    /on\w+\s*=/i  // Event handler injection
+  // Skip body validation for authenticated requests (they're already trusted)
+  // Only validate URL and User-Agent for all requests
+  const isAuthenticated = req.user || req.headers.authorization;
+  
+  // Check for suspicious patterns in URL and User-Agent (always check these)
+  const urlPatterns = [
+    /\.\./,  // Directory traversal in URL
+    /<script/i,  // XSS attempts in URL
+    /javascript:/i,  // JavaScript injection in URL
+  ];
+
+  // More specific patterns for body (only if not authenticated)
+  const bodyPatterns = [
+    /<script[^>]*>.*?<\/script>/gi,  // Complete script tags
+    /javascript:\s*[^"'\s]/i,  // JavaScript: protocol with code
+    /on\w+\s*=\s*["'][^"']*["']/i,  // Event handlers with values (onclick="...")
+    /union\s+select/i,  // SQL injection
   ];
 
   const userAgent = req.get('User-Agent') || '';
   const url = req.originalUrl || '';
-  const body = JSON.stringify(req.body) || '';
 
-  for (const pattern of suspiciousPatterns) {
-    if (pattern.test(userAgent) || pattern.test(url) || pattern.test(body)) {
+  // Always check URL and User-Agent
+  for (const pattern of urlPatterns) {
+    if (pattern.test(userAgent) || pattern.test(url)) {
+      logger.warn('Suspicious request detected in URL/User-Agent:', {
+        url,
+        userAgent,
+        ip: req.ip
+      });
       return res.status(400).json({
         error: 'Suspicious request detected',
         message: 'Request blocked for security reasons'
       });
+    }
+  }
+
+  // Only check body for unauthenticated requests
+  if (!isAuthenticated && req.body) {
+    try {
+      const bodyString = JSON.stringify(req.body);
+      for (const pattern of bodyPatterns) {
+        if (pattern.test(bodyString)) {
+          logger.warn('Suspicious request detected in body:', {
+            url,
+            ip: req.ip,
+            pattern: pattern.toString()
+          });
+          return res.status(400).json({
+            error: 'Suspicious request detected',
+            message: 'Request blocked for security reasons'
+          });
+        }
+      }
+    } catch (error) {
+      // If body can't be stringified, skip body validation
+      // This can happen with binary data or circular references
     }
   }
 
