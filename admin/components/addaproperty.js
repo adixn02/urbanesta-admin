@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import ImageUpload from './imageUpload';
 import FilePreview from './filePreview';
 import MultipleFilePreview from './multipleFilePreview';
@@ -103,6 +103,90 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
   });
 
   const [errors, setErrors] = useState({});
+  const [isFormValidState, setIsFormValidState] = useState(false);
+
+  // Check if form is valid (for button enable/disable) - real-time validation
+  const isFormValid = useCallback(() => {
+    // Common validation
+    if (!formData.city) return false;
+    if (!formData.category) return false;
+    if (!formData.subcategory) return false;
+    if (!formData.description?.trim()) return false;
+    
+    // Title validation for regular properties only
+    if (formType === 'regular' && !formData.title?.trim()) return false;
+
+    // Regular property validation
+    if (formType === 'regular') {
+      if (!formData.price || formData.price <= 0) return false;
+      
+      // Check locality if available
+      const availableLocalities = dropdownData.cities?.find(c => 
+        c._id === formData.city || c._id?.toString() === formData.city?.toString()
+      )?.localities || [];
+      if (availableLocalities.length > 0 && !formData.locality) return false;
+      
+      if (!formData.location?.trim()) return false;
+      
+      // Validate images - must have at least 2, max 5
+      const images = formData.images || [];
+      const validImages = images.filter(img => {
+        // Valid if it's a File object or a non-empty string URL
+        return img instanceof File || (typeof img === 'string' && img.trim() !== '');
+      });
+      if (validImages.length < 2 || validImages.length > 5) return false;
+    }
+
+    // Builder property validation
+    if (formType === 'builder') {
+      if (!formData.builder) return false;
+      if (!formData.projectName?.trim()) return false;
+      if (!formData.about?.trim()) return false;
+      if (!formData.reraNo?.trim()) return false;
+      if (!formData.fullAddress?.trim()) return false;
+      if (!formData.price || formData.price <= 0) return false;
+      if (!formData.possessionDate) return false;
+      if (!formData.landArea?.trim()) return false;
+      
+      // Validate unit details
+      if (!formData.unitDetails || formData.unitDetails.length === 0) return false;
+      const validUnits = formData.unitDetails.every(unit => {
+        return unit.unitType?.trim() && 
+               unit.area?.trim() && 
+               (unit.floorPlan instanceof File || (typeof unit.floorPlan === 'string' && unit.floorPlan.trim() !== ''));
+      });
+      if (!validUnits) return false;
+      
+      // Validate master plan
+      if (!formData.masterPlan || 
+          (!(formData.masterPlan instanceof File) && 
+           !(typeof formData.masterPlan === 'string' && formData.masterPlan.trim() !== ''))) {
+        return false;
+      }
+      
+      // Validate highlights
+      const validHighlights = formData.highlights?.filter(h => h?.trim() !== '') || [];
+      if (validHighlights.length === 0) return false;
+      
+      // Validate connectivity points
+      const validConnectivity = formData.connectivityPoints?.filter(c => c?.text?.trim() !== '') || [];
+      if (validConnectivity.length === 0) return false;
+      
+      // Validate project images - must have at least 1, max 5
+      const projectImages = formData.projectImages || [];
+      const validProjectImages = projectImages.filter(img => {
+        return img instanceof File || (typeof img === 'string' && img.trim() !== '');
+      });
+      if (validProjectImages.length < 1 || validProjectImages.length > 5) return false;
+    }
+
+    return true;
+  }, [formData, formType, dropdownData.cities]);
+
+  // Update form validity state when formData changes
+  useEffect(() => {
+    setIsFormValidState(isFormValid());
+  }, [isFormValid]);
 
   // Clear errors when formData changes (especially when editing property)
   useEffect(() => {
@@ -2140,7 +2224,8 @@ export default function AddPropertyForm({ property, onSave, isLoading = false, d
         <button 
           type="submit" 
           className="btn btn-primary" 
-          disabled={isLoading}
+          disabled={isLoading || !isFormValidState}
+          title={!isFormValidState ? 'Please fill all required fields with valid inputs (text and images)' : ''}
         >
           {isLoading ? (
             <>

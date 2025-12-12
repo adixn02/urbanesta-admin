@@ -181,7 +181,26 @@ export default function ManageProperty() {
         throw new Error('AUTH_EXPIRED');
       }
       
-      const data = await response.json();
+      // Parse response - handle both JSON and text responses
+      let data;
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (parseError) {
+          // If JSON parsing fails, try to get text response
+          const text = await response.text();
+          throw new Error(`Server error: ${text || response.statusText}`);
+        }
+      } else {
+        const text = await response.text();
+        throw new Error(`Server error: ${text || response.statusText}`);
+      }
+      
+      // Validate response structure
+      if (!data || typeof data !== 'object') {
+        throw new Error('Invalid response format from server');
+      }
       
       if (data.success) {
         showNotification(
@@ -200,7 +219,55 @@ export default function ManageProperty() {
             window.location.href = '/';
           }, 2000);
         } else {
-          showNotification(data.error || 'Failed to save property', 'danger');
+          // Show detailed error message from API
+          // Handle error as string, object, or undefined
+          let errorMessage = 'Failed to save property';
+          
+          if (data.error) {
+            if (typeof data.error === 'string') {
+              errorMessage = data.error;
+            } else if (typeof data.error === 'object' && data.error !== null) {
+              // If error is an object, try to extract message
+              if (data.error.message) {
+                errorMessage = typeof data.error.message === 'string' ? data.error.message : String(data.error.message);
+              } else if (data.error.error) {
+                errorMessage = typeof data.error.error === 'string' ? data.error.error : String(data.error.error);
+              } else {
+                // Check if object has any meaningful properties
+                const errorKeys = Object.keys(data.error);
+                if (errorKeys.length > 0) {
+                  // Try to get first meaningful value
+                  const firstValue = data.error[errorKeys[0]];
+                  errorMessage = typeof firstValue === 'string' ? firstValue : `Validation error: ${errorKeys.join(', ')}`;
+                } else {
+                  // Empty object, use default message
+                  errorMessage = 'Validation failed. Please check all required fields.';
+                }
+              }
+            }
+          } else if (data.message) {
+            errorMessage = typeof data.message === 'string' ? data.message : String(data.message);
+          }
+          
+          // Ensure errorMessage is a valid string
+          if (!errorMessage || errorMessage === '{}' || errorMessage === '[object Object]') {
+            errorMessage = 'Failed to save property. Please check all required fields and try again.';
+          }
+          
+          console.error('Property save error:', {
+            error: errorMessage,
+            errorData: data.error,
+            errorDataType: typeof data.error,
+            details: data.details,
+            status: response.status,
+            fullResponse: data,
+            propertyData: {
+              type: propertyData.type,
+              city: propertyData.city,
+              category: propertyData.category
+            }
+          });
+          showNotification(errorMessage, 'danger');
         }
       }
     } catch (error) {
@@ -211,7 +278,25 @@ export default function ManageProperty() {
           window.location.href = '/';
         }, 2000);
       } else {
-        showNotification('Error saving property. Please try again.', 'danger');
+        // Log full error for debugging
+        console.error('Error saving property:', {
+          error: error,
+          message: error.message,
+          stack: error.stack,
+          name: error.name
+        });
+        
+        // Extract error message safely
+        let errorMessage = 'Error saving property. Please try again.';
+        if (error.message) {
+          errorMessage = error.message;
+        } else if (typeof error === 'string') {
+          errorMessage = error;
+        } else if (error && typeof error === 'object') {
+          errorMessage = error.message || error.error || JSON.stringify(error);
+        }
+        
+        showNotification(errorMessage, 'danger');
       }
     } finally {
       setIsSaving(false);

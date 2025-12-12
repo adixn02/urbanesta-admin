@@ -53,12 +53,23 @@ export default function ImageUpload({ label, value, onChange }) {
       }
   }, [value]);
 
-  // Cleanup blob URL on unmount
+  // Cleanup blob URL on unmount - delay to allow images to finish loading
   useEffect(() => {
+    const currentBlobUrl = blobUrlRef.current;
     return () => {
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-      }
+      // Use a small delay to allow any in-flight image loads to complete
+      // This prevents ERR_FILE_NOT_FOUND errors when images are still loading
+      const timeoutId = setTimeout(() => {
+        if (currentBlobUrl && currentBlobUrl.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(currentBlobUrl);
+          } catch (error) {
+            // Silently handle errors if URL was already revoked
+          }
+        }
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
     };
   }, []);
 
@@ -141,6 +152,21 @@ export default function ImageUpload({ label, value, onChange }) {
                   display: "block"
                 }}
                 onError={(e) => {
+                  // Handle blob URL errors gracefully
+                  if (preview && preview.startsWith('blob:')) {
+                    // Blob URL might have been revoked, try to recreate if we have the file
+                    if (file) {
+                      try {
+                        const newBlobUrl = URL.createObjectURL(file);
+                        blobUrlRef.current = newBlobUrl;
+                        e.target.src = newBlobUrl;
+                        return;
+                      } catch (error) {
+                        // If we can't recreate, show error
+                      }
+                    }
+                  }
+                  // Silently handle other image loading errors
                   e.target.style.display = 'none';
                   if (!e.target.parentElement.querySelector('.image-error')) {
                     const errorDiv = document.createElement('div');

@@ -103,16 +103,26 @@ export default function MultipleFilePreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, valueToImageItems]);
     
-  // Cleanup blob URLs on unmount
+  // Cleanup blob URLs on unmount - delay to allow images to finish loading
   useEffect(() => {
     const blobUrlMap = blobUrlRefs.current;
     return () => {
-      blobUrlMap.forEach((blobUrl) => {
-        if (blobUrl && blobUrl.startsWith('blob:')) {
-          URL.revokeObjectURL(blobUrl);
-        }
-      });
-      blobUrlMap.clear();
+      // Use a small delay to allow any in-flight image loads to complete
+      // This prevents ERR_FILE_NOT_FOUND errors when images are still loading
+      const timeoutId = setTimeout(() => {
+        blobUrlMap.forEach((blobUrl) => {
+          if (blobUrl && blobUrl.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL(blobUrl);
+            } catch (error) {
+              // Silently handle errors if URL was already revoked
+            }
+          }
+        });
+        blobUrlMap.clear();
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
     };
   }, []);
 
@@ -197,11 +207,25 @@ export default function MultipleFilePreview({
 
 
   const handleImageError = (id) => {
-    setImageItems(prev => prev.map(item => 
-      item.id === id 
-        ? { ...item, error: 'Failed to load image', preview: null }
-        : item
-    ));
+    setImageItems(prev => prev.map(item => {
+      if (item.id === id) {
+        // If it's a blob URL error and we have the file, try to recreate the blob URL
+        if (item.type === 'file' && item.file && item.preview && item.preview.startsWith('blob:')) {
+          try {
+            const newBlobUrl = URL.createObjectURL(item.file);
+            blobUrlRefs.current.set(id, newBlobUrl);
+            // Return updated item with new blob URL - this will trigger a re-render
+            return { ...item, preview: newBlobUrl, error: null };
+          } catch (error) {
+            // If recreation fails, show error
+            return { ...item, error: 'Failed to load image', preview: null };
+          }
+        }
+        // For other errors, show error message
+        return { ...item, error: 'Failed to load image', preview: null };
+      }
+      return item;
+    }));
   };
 
   const handleImageLoad = (id) => {

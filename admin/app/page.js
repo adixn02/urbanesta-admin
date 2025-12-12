@@ -509,6 +509,9 @@ export default function Home(){
       const data = await response.json();
 
       if (data.success) {
+        // Clear any error messages before showing success
+        setForgotError('');
+        setError(''); // Clear main login error as well
         setForgotSuccess('✅ Password reset successfully! Redirecting to login...');
         // Clear form data
         setNewPassword('');
@@ -516,6 +519,8 @@ export default function Home(){
         // Close modal and show login after 2 seconds
         setTimeout(() => {
           closeForgotPasswordModal();
+          // Clear error again when showing success on main form
+          setError('');
           setSuccess('Password reset successfully! You can now login with your new password.');
         }, 2000);
       } else {
