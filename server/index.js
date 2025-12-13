@@ -136,15 +136,15 @@ app.use(compression({
   threshold: 1024 // Only compress responses larger than 1KB
 }));
 
-// Request body parsing with size limits
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Request body parsing with size limits (increased for image uploads - will be compressed)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Request validation middleware
 app.use(validateRequest);
 
-// Request size validation middleware (additional check)
-app.use(validateRequestSize('10mb'));
+// Request size validation middleware (increased for image uploads - will be compressed)
+app.use(validateRequestSize('50mb'));
 
 // Input sanitization middleware (apply globally for all routes)
 app.use((req, res, next) => {

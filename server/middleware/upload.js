@@ -67,13 +67,25 @@ const createUploadMiddleware = () => {
           transform: function (req, file, cb) {
             // Only compress if it's a supported image
             if (isSupportedImage(file.mimetype)) {
-              processImageFile(file, { quality: 85, maxWidth: 1920, maxHeight: 1080 })
+              processImageFile(file, { 
+                quality: 80, // Optimized for better compression
+                maxWidth: 1920, 
+                maxHeight: 1080,
+                maxFileSize: 2 * 1024 * 1024 // Target max 2MB
+              })
                 .then(processedFile => {
+                  logger.info('Image compressed for S3 upload:', {
+                    original: file.originalname,
+                    originalSize: file.size,
+                    compressedSize: processedFile.size,
+                    reduction: Math.round((1 - processedFile.size / file.size) * 100) + '%'
+                  });
                   cb(null, processedFile.buffer);
                 })
                 .catch(error => {
                   logger.error('WebP compression error:', { error: error.message });
-                  cb(error);
+                  // If compression fails, try to use original buffer
+                  cb(null, file.buffer);
                 });
             } else {
               // For non-image files, just pass through
@@ -111,7 +123,7 @@ const createUploadMiddleware = () => {
         }
       },
       limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB limit
+        fileSize: 50 * 1024 * 1024, // 50MB limit (will be compressed to smaller size)
       },
     });
   } else {
@@ -162,7 +174,7 @@ const createUploadMiddleware = () => {
         }
       },
       limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB limit
+        fileSize: 50 * 1024 * 1024, // 50MB limit (will be compressed to smaller size)
       },
     });
   }
@@ -178,9 +190,16 @@ export const processUploadedFiles = async (req, res, next) => {
       if (isSupportedImage(req.file.mimetype)) {
         logger.debug(`Processing image: ${req.file.originalname}`);
         const processedFile = await processImageFile(req.file, { 
-          quality: 85, 
+          quality: 80, // Optimized for better compression
           maxWidth: 1920, 
-          maxHeight: 1080 
+          maxHeight: 1080,
+          maxFileSize: 2 * 1024 * 1024 // Target max 2MB
+        });
+        logger.info('Image compressed for local storage:', {
+          original: req.file.originalname,
+          originalSize: req.file.size,
+          compressedSize: processedFile.size,
+          reduction: Math.round((1 - processedFile.size / req.file.size) * 100) + '%'
         });
         req.file = processedFile;
       }
@@ -195,9 +214,16 @@ export const processUploadedFiles = async (req, res, next) => {
             if (isSupportedImage(file.mimetype)) {
               logger.debug(`Processing image: ${file.originalname}`);
               const processedFile = await processImageFile(file, { 
-                quality: 85, 
+                quality: 80, // Optimized for better compression
                 maxWidth: 1920, 
-                maxHeight: 1080 
+                maxHeight: 1080,
+                maxFileSize: 2 * 1024 * 1024 // Target max 2MB
+              });
+              logger.info('Image compressed:', {
+                original: file.originalname,
+                originalSize: file.size,
+                compressedSize: processedFile.size,
+                reduction: Math.round((1 - processedFile.size / file.size) * 100) + '%'
               });
               processedFiles[fieldName].push(processedFile);
             } else {
@@ -209,9 +235,16 @@ export const processUploadedFiles = async (req, res, next) => {
           if (isSupportedImage(files.mimetype)) {
             logger.debug(`Processing image: ${files.originalname}`);
             const processedFile = await processImageFile(files, { 
-              quality: 85, 
+              quality: 80, // Optimized for better compression
               maxWidth: 1920, 
-              maxHeight: 1080 
+              maxHeight: 1080,
+              maxFileSize: 2 * 1024 * 1024 // Target max 2MB
+            });
+            logger.info('Image compressed:', {
+              original: files.originalname,
+              originalSize: files.size,
+              compressedSize: processedFile.size,
+              reduction: Math.round((1 - processedFile.size / files.size) * 100) + '%'
             });
             processedFiles[fieldName] = processedFile;
           } else {

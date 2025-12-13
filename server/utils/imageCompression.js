@@ -14,14 +14,33 @@ import path from 'path';
  */
 export const compressToWebP = async (imageBuffer, options = {}) => {
   const {
-    quality = 85,
+    quality = 80, // Reduced from 85 to 80 for better compression
     maxWidth = 1920,
-    maxHeight = 1080
+    maxHeight = 1080,
+    maxFileSize = 2 * 1024 * 1024 // 2MB target max size
   } = options;
 
   try {
-    const compressedBuffer = await sharp(imageBuffer)
-      .resize(maxWidth, maxHeight, {
+    // Get original image metadata
+    const metadata = await sharp(imageBuffer).metadata();
+    const originalSize = imageBuffer.length;
+    
+    // Calculate target dimensions if image is very large
+    let targetWidth = maxWidth;
+    let targetHeight = maxHeight;
+    
+    if (metadata.width && metadata.height) {
+      // If image is very large, scale down more aggressively
+      if (metadata.width > 3000 || metadata.height > 3000) {
+        const scale = Math.min(3000 / metadata.width, 3000 / metadata.height);
+        targetWidth = Math.round(metadata.width * scale);
+        targetHeight = Math.round(metadata.height * scale);
+      }
+    }
+    
+    // First compression attempt
+    let compressedBuffer = await sharp(imageBuffer)
+      .resize(targetWidth, targetHeight, {
         fit: 'inside',
         withoutEnlargement: true
       })
@@ -31,8 +50,26 @@ export const compressToWebP = async (imageBuffer, options = {}) => {
       })
       .toBuffer();
 
-    const reductionPercent = Math.round((1 - compressedBuffer.length / imageBuffer.length) * 100);
-    console.log(`📸 Image compressed: ${imageBuffer.length} bytes → ${compressedBuffer.length} bytes (${reductionPercent}% reduction)`);
+    // If still too large, reduce quality further
+    if (compressedBuffer.length > maxFileSize && quality > 60) {
+      const newQuality = Math.max(60, quality - 10);
+      compressedBuffer = await sharp(imageBuffer)
+        .resize(targetWidth, targetHeight, {
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .webp({ 
+          quality: newQuality,
+          effort: 6
+        })
+        .toBuffer();
+    }
+
+    const reductionPercent = Math.round((1 - compressedBuffer.length / originalSize) * 100);
+    const sizeInMB = (compressedBuffer.length / (1024 * 1024)).toFixed(2);
+    const originalSizeInMB = (originalSize / (1024 * 1024)).toFixed(2);
+    
+    console.log(`📸 Image compressed: ${originalSizeInMB}MB → ${sizeInMB}MB (${reductionPercent}% reduction)`);
     
     // Log compression details
     if (reductionPercent > 0) {
@@ -98,8 +135,20 @@ export const processImageFile = async (file, options = {}) => {
       throw new Error('No file buffer or path available');
     }
 
-    // Compress to WebP
-    const compressedBuffer = await compressToWebP(imageBuffer, options);
+    // Log original file size
+    const originalSizeMB = (imageBuffer.length / (1024 * 1024)).toFixed(2);
+    console.log(`📤 Processing image: ${file.originalname} (${originalSizeMB}MB)`);
+
+    // Compress to WebP with optimized settings
+    const compressionOptions = {
+      quality: 80, // Good balance between quality and size
+      maxWidth: 1920,
+      maxHeight: 1080,
+      maxFileSize: 2 * 1024 * 1024, // Target max 2MB
+      ...options
+    };
+    
+    const compressedBuffer = await compressToWebP(imageBuffer, compressionOptions);
     
     // Update file properties
     const processedFile = {
